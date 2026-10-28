@@ -5,6 +5,7 @@
  * real measurements, and what happens when the fonts cannot be fetched.
  */
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +74,29 @@ test("the project is created by HyperFrames' own init, at a pinned version", asy
   assert.equal(report.dir, join(parent, "thai-tea-ad"));
   // The clips need somewhere to land before the first scene finishes.
   await stat(join(report.dir, "assets", "scenes"));
+});
+
+test("a parent directory that does not exist yet is made, not spawned into", async () => {
+  // `init` runs with the parent as its cwd. Spawning into a directory that is
+  // not there fails as "spawn C:\\WINDOWS\\system32\\cmd.exe ENOENT" — an error
+  // about the shell, naming neither the path nor the problem. Hit live while
+  // pointing a first project at a dated folder that had not been made yet.
+  const base = await mkdtemp(join(tmpdir(), "fuse-scaffold-"));
+  const parent = join(base, "2026-10-28", "campaign");
+  // Checked inside the runner, not after: the scene directory is made with
+  // `recursive` at the end, so by the time createProject returns the parent
+  // exists either way. What matters is that it existed when init was spawned.
+  let parentExistedAtSpawn: boolean | undefined;
+  const { run, calls } = recorder((spawned) => {
+    parentExistedAtSpawn = existsSync(spawned.cwd);
+    return { code: 0, stdout: "", stderr: "" };
+  });
+
+  const report = await createProject(parent, "new-ad", deps(run));
+
+  assert.equal(parentExistedAtSpawn, true, "init was spawned into a directory that was not there");
+  assert.equal(calls[0]!.cwd, parent, "init must still run in the parent");
+  assert.equal(report.dir, join(parent, "new-ad"));
 });
 
 test("a failed init says what HyperFrames said, not what we guess", async () => {

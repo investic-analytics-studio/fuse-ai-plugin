@@ -99,6 +99,11 @@ export async function createProject(
     await mkdir(join(dir, SCENE_DIR), { recursive: true });
     return { dir, created: false, log: "the HyperFrames scaffold was already there" };
   }
+  // `init` runs with the parent as its working directory, and spawning into a
+  // directory that does not exist fails as ENOENT naming the shell rather than
+  // the missing path — which tells the caller nothing. Picking a fresh folder
+  // for an ad is the normal first move, so make the parent instead.
+  await mkdir(parent, { recursive: true });
   const result = await deps.run(
     "npx",
     ["--yes", `hyperframes@${HYPERFRAMES_VERSION}`, "init", name, "--non-interactive"],
