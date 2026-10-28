@@ -57,11 +57,19 @@ export interface ClipBox {
 /** Reads a clip's real box and length. Injected for the same reason. */
 export type Probe = (file: string) => Promise<ClipBox>;
 
+/**
+ * Reads how long a media file runs, in seconds. Separate from `Probe` because
+ * an mp3 has no video stream to read a box from, and `Probe` requires one.
+ */
+export type ProbeDuration = (file: string) => Promise<number>;
+
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface ScaffoldDeps {
   readonly run: Runner;
   readonly probe: Probe;
+  /** Optional: a machine without ffprobe can still scaffold and generate. */
+  readonly probeDuration?: ProbeDuration;
   readonly fetch?: Fetcher;
 }
 
@@ -289,6 +297,30 @@ export function ffprobeProbe(run: Runner): Probe {
       throw new Error(`ffprobe read ${file} but found no video stream in it`);
     }
     return { width: stream.width, height: stream.height, seconds };
+  };
+}
+
+/**
+ * The duration-only probe: the same ffprobe, asked for the container's length
+ * and nothing else, so it answers for an mp3 as readily as for an mp4.
+ */
+export function ffprobeDuration(run: Runner): ProbeDuration {
+  return async (file: string) => {
+    const binary = process.env.FFPROBE_PATH || "ffprobe";
+    const result = await run(
+      binary,
+      ["-v", "error", "-show_entries", "format=duration", "-of", "json", file],
+      process.cwd(),
+    );
+    if (result.code !== 0) {
+      throw new Error(`ffprobe could not read ${file}: ${result.stderr || result.stdout}`);
+    }
+    const parsed = JSON.parse(result.stdout) as { format?: { duration?: string } };
+    const seconds = Number(parsed.format?.duration);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      throw new Error(`ffprobe read ${file} but found no playable duration in it`);
+    }
+    return Number(seconds.toFixed(3));
   };
 }
 

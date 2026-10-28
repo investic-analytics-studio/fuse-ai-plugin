@@ -1,8 +1,8 @@
 /**
  * The tool surface is where a model's words become our calls, so these tests
  * are about the boundary: what is refused before anything is created or
- * charged, what the five tools are wired to, and the two places where calling
- * the same tool twice must not mean doing the work twice.
+ * charged, what the seven tools are wired to, and the places where calling the
+ * same tool twice must not mean doing the work twice.
  *
  * The lifecycle's own counting is covered in lifecycle.test.ts; here a budget
  * test only checks the one thing this layer decides — that maxTokens is a
@@ -20,6 +20,13 @@ import type { RunView } from "../src/fuse/client.ts";
 import type { RunsPort } from "../src/job/lifecycle.ts";
 import type { ClipBox, CommandResult, Runner, ScaffoldDeps } from "../src/project/scaffold.ts";
 import { createTools, type ToolDefinition } from "../src/tools.ts";
+import type {
+  SpeakRequest,
+  VoiceListing,
+  VoiceModelInfo,
+  VoicePort,
+  VoiceQuota,
+} from "../src/voice/elevenlabs.ts";
 import type { JobSpec, SceneSpec } from "../src/domain.ts";
 
 const fixture = JSON.parse(
@@ -48,12 +55,39 @@ class FakeRuns implements RunsPort {
   }
 }
 
+/**
+ * A stand-in for the customer's ElevenLabs account. Narration's own counting
+ * lives in voice.test.ts; here it only has to answer so the tool layer can be
+ * exercised, and record that it was reached at all.
+ */
+class FakeVoice implements VoicePort {
+  spoken: SpeakRequest[] = [];
+
+  async voices(): Promise<VoiceListing> {
+    return { voices: [{ id: "v-ploy", name: "Ploy", category: "premade" }], hasMore: false };
+  }
+
+  async models(): Promise<readonly VoiceModelInfo[]> {
+    return [{ id: "eleven_multilingual_v2", name: "Multilingual v2", languages: ["th", "en"] }];
+  }
+
+  async quota(): Promise<VoiceQuota> {
+    return { used: 0, limit: 100_000, remaining: 100_000 };
+  }
+
+  async speak(request: SpeakRequest): Promise<Uint8Array> {
+    this.spoken.push(request);
+    return new Uint8Array([0x49, 0x44, 0x33]);
+  }
+}
+
 interface Harness {
   tool(name: string): ToolDefinition;
   names: string[];
   runs: FakeRuns;
   argv: string[][];
   fetched: string[];
+  voice?: FakeVoice;
 }
 
 function harness(
@@ -61,6 +95,8 @@ function harness(
     fetch?: (url: string, init?: RequestInit) => Promise<Response>;
     probe?: (file: string) => Promise<ClipBox>;
     run?: Runner;
+    /** Off by default, which is the state of a customer who set no second key. */
+    voice?: boolean;
   } = {},
 ): Harness {
   const runs = new FakeRuns();
@@ -94,9 +130,11 @@ function harness(
         return new Response(new Uint8Array([119, 79, 70, 50]), { status: 200 });
       }),
   };
+  const voice = options.voice ? new FakeVoice() : undefined;
   const list = createTools({
     catalog: async () => catalog,
     runs,
+    ...(voice ? { voice } : {}),
     openClip: async () =>
       new ReadableStream<Uint8Array>({
         start(controller) {
@@ -117,13 +155,16 @@ function harness(
     runs,
     argv,
     fetched,
+    ...(voice ? { voice } : {}),
   };
 }
 
-async function project(): Promise<{ dir: string; harness: Harness }> {
+async function project(
+  options: { voice?: boolean } = {},
+): Promise<{ dir: string; harness: Harness }> {
   const parent = await mkdtemp(join(tmpdir(), "fuse-tools-"));
   const dir = join(parent, "thai-tea-ad");
-  const bench = harness();
+  const bench = harness(options);
   await bench.tool("fuse_project_new").run({
     dir,
     tier: "t2v-low-standard",
@@ -140,13 +181,15 @@ const SCENES = [
 
 /* ------------------------------------------------------------------ surface */
 
-test("the surface is the five tools the design settled on, and nothing else", () => {
+test("the surface is the seven tools the design settled on, and nothing else", () => {
   assert.deepEqual(harness().names, [
     "fuse_tiers",
     "fuse_quote",
     "fuse_project_new",
     "fuse_scenes",
     "fuse_manifest",
+    "fuse_voices",
+    "fuse_narration",
   ]);
 });
 
@@ -470,6 +513,86 @@ test("asking for a manifest before any clip exists says so plainly", async () =>
   await assert.rejects(() => bench.tool("fuse_manifest").run({ dir }), /nothing to measure/);
 });
 
+/* ------------------------------------------------------------------- voice */
+
+test("without a second key the voice tools say which key and where to get it", async () => {
+  // The common case for a new customer, and the one place a bare 401 would
+  // send them looking at the Fuse key they just set up correctly.
+  const bench = harness();
+  for (const name of ["fuse_voices", "fuse_narration"]) {
+    await assert.rejects(
+      () =>
+        bench.tool(name).run({
+          dir: ".",
+          voiceId: "v-ploy",
+          maxCharacters: 10,
+          lines: [{ slug: "hook", text: "ชาไทย" }],
+        }),
+      /ELEVENLABS_API_KEY/,
+      `${name} should name the key that is missing`,
+    );
+  }
+});
+
+test("the voice list carries the models and what is left, so a voice can be chosen", async () => {
+  const bench = harness({ voice: true });
+  const result = (await bench.tool("fuse_voices").run({})) as {
+    voices: Array<{ id: string }>;
+    models: Array<{ id: string; languages: string[] }>;
+    quota: { remaining: number };
+    defaultModel: string;
+  };
+  assert.deepEqual(result.voices.map((voice) => voice.id), ["v-ploy"]);
+  assert.ok(result.models[0]!.languages.includes("th"), "Thai must be visible on the model");
+  assert.equal(result.quota.remaining, 100_000);
+  assert.equal(result.defaultModel, "eleven_multilingual_v2");
+});
+
+test("narration lands in the project, beside the clips it will be mixed with", async () => {
+  const { dir, harness: bench } = await project({ voice: true });
+  const result = (await bench.tool("fuse_narration").run({
+    dir,
+    voiceId: "v-ploy",
+    maxCharacters: 200,
+    lines: [{ slug: "scene-a", text: "ชาไทยเย็นแก้วโปรด" }],
+  })) as { lines: Array<{ file?: string; state: string }>; charactersSpent: number };
+  assert.equal(result.lines[0]!.state, "spoken");
+  assert.match(result.lines[0]!.file!, /^assets\/audio\/scene-a-[0-9a-f]{16}\.mp3$/);
+  await stat(join(dir, result.lines[0]!.file!));
+  assert.equal(bench.voice!.spoken.length, 1);
+});
+
+test("narration refuses a directory that is not one of our projects", async () => {
+  // Voiceover with nothing to mix it into is money spent on an orphan file.
+  const bench = harness({ voice: true });
+  const loose = await mkdtemp(join(tmpdir(), "fuse-loose-"));
+  await assert.rejects(
+    () =>
+      bench.tool("fuse_narration").run({
+        dir: loose,
+        voiceId: "v-ploy",
+        maxCharacters: 200,
+        lines: [{ slug: "hook", text: "ชาไทย" }],
+      }),
+    /fuse_project_new/,
+  );
+  assert.equal(bench.voice!.spoken.length, 0);
+});
+
+test("a dry run through the tool spends nothing and names the figure to agree", async () => {
+  const { dir, harness: bench } = await project({ voice: true });
+  const result = (await bench.tool("fuse_narration").run({
+    dir,
+    voiceId: "v-ploy",
+    maxCharacters: 1,
+    dryRun: true,
+    lines: [{ slug: "scene-a", text: "ชาไทยเย็น" }],
+  })) as { charactersToSpend: number; next: string };
+  assert.equal(result.charactersToSpend, 9);
+  assert.equal(bench.voice!.spoken.length, 0);
+  assert.match(result.next, /Agree 9 characters with the user/);
+});
+
 /* -------------------------------------------------------------- the writing */
 
 test("every tool's description tells the model what it costs and what comes next", () => {
@@ -480,4 +603,10 @@ test("every tool's description tells the model what it costs and what comes next
   }
   // The one that spends money says so, in those words.
   assert.match(harness().tool("fuse_scenes").description, /only tool that spends tokens/);
+  // And the one that spends the customer's other account says whose money it
+  // is, because that is the thing a model would otherwise get wrong out loud.
+  for (const name of ["fuse_voices", "fuse_narration"]) {
+    assert.match(harness().tool(name).description, /ElevenLabs/);
+    assert.match(harness().tool(name).description, /not Fuse tokens|never on Fuse/);
+  }
 });

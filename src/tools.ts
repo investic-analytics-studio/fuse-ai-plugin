@@ -1,5 +1,5 @@
 /**
- * The public surface: five tools, and the only place that parses what a model
+ * The public surface: seven tools, and the only place that parses what a model
  * sent us.
  *
  * Shape is checked here with zod; *availability* is not. Whether a tier exists,
@@ -33,6 +33,8 @@ import {
   type ScaffoldDeps,
 } from "./project/scaffold.ts";
 import { isTierId, type JobSpec, type TierId } from "./domain.ts";
+import { DEFAULT_VOICE_MODEL, type VoicePort } from "./voice/elevenlabs.ts";
+import { characterCount, narrate } from "./voice/narrate.ts";
 
 export interface ToolDeps {
   /**
@@ -44,6 +46,12 @@ export interface ToolDeps {
   readonly runs: RunsPort;
   readonly openClip: OpenClip;
   readonly scaffold: ScaffoldDeps;
+  /**
+   * The customer's own ElevenLabs account, when they have set a key for it.
+   * Absent is a normal state — the video tools do not need it — so the two
+   * voice tools are the only ones that say so, and they say what to set.
+   */
+  readonly voice?: VoicePort;
   /** Injected so a test knows the id it will get back. */
   newJobId(): string;
 }
@@ -131,6 +139,24 @@ function specOf(catalog: Catalog, tier: string, resolution: string, aspect: stri
     resolution: catalog.resolution(id, resolution),
     aspect: catalog.aspect(id, aspect),
   };
+}
+
+/**
+ * The customer's ElevenLabs account, or a refusal that names the one thing
+ * they have to do. Voiceover is their account and their invoice, so the key
+ * cannot be defaulted, borrowed from Fuse or guessed at.
+ */
+function voiceOf(deps: ToolDeps): VoicePort {
+  if (!deps.voice) {
+    throw new Error(
+      "No ElevenLabs API key, so there is no voice to speak with. Voiceover runs on the " +
+        "customer's own ElevenLabs account: get a key from elevenlabs.io, then re-run this " +
+        "package's `install` command with ELEVENLABS_API_KEY set in the environment, and " +
+        "restart the client so the server picks it up. Everything else in this package — " +
+        "tiers, quotes, clips, the manifest — works without it.",
+    );
+  }
+  return deps.voice;
 }
 
 async function jobIn(dir: string): Promise<JobStore> {
@@ -381,6 +407,138 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
           file: "assets/scenes/manifest.json",
           ...manifest,
           next: "Write the composition with HyperFrames' own skills, then run its check and render.",
+        };
+      },
+    }),
+
+    tool({
+      name: "fuse_voices",
+      title: "List the voices on the customer's ElevenLabs account",
+      description:
+        "The voices this ElevenLabs account can speak with, the text-to-speech models it may " +
+        "use and the languages each one covers, and how many characters are left this period. " +
+        "Costs nothing.\n\n" +
+        "Voiceover runs on the customer's own ElevenLabs account, never on Fuse: these " +
+        "characters are billed by ElevenLabs and no Fuse token is involved. Show the list and " +
+        "let the user pick — a voice is the ad's presenter, so it is their choice to make, not " +
+        "one to default. Pass the id they choose to fuse_narration.\n\n" +
+        "Check that the model you intend to use lists the script's language: a model that does " +
+        "not speak Thai will mispronounce a Thai script and charge for it all the same.",
+      shape: {
+        search: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Narrow the list by name, description, label or category. Useful on an account " +
+              "with more voices than one page holds.",
+          ),
+      },
+      run: async ({ search }) => {
+        const voice = voiceOf(deps);
+        const [listing, models, quota] = await Promise.all([
+          voice.voices(search),
+          voice.models(),
+          voice.quota(),
+        ]);
+        return {
+          voices: listing.voices,
+          hasMore: listing.hasMore,
+          models,
+          quota,
+          defaultModel: DEFAULT_VOICE_MODEL,
+          next:
+            "Ask the user which voice to use, then call fuse_narration with that voiceId and " +
+            "dryRun true to price the script before spending anything.",
+        };
+      },
+    }),
+
+    tool({
+      name: "fuse_narration",
+      title: "Speak the script into the project as voiceover files",
+      description:
+        "Writes one mp3 per line into assets/audio/ in the voice the user chose, and reports " +
+        "each file's measured duration so the picture can be timed to the voice.\n\n" +
+        "This spends the customer's ElevenLabs character allowance, not Fuse tokens. Call it " +
+        "first with dryRun true: that prices every line, spends nothing and touches nothing, " +
+        "and the figure it reports is the one to agree with the user. maxCharacters is then the " +
+        "ceiling for the real call — if the lines would go over it, nothing is spoken and " +
+        "nothing is charged.\n\n" +
+        "Safe to call again. A line whose exact words were already spoken in the same voice is " +
+        "reused from disk for free, so a call cut off by a timeout carries on instead of paying " +
+        "for the script twice. Renaming a scene is free; editing a word is new audio, because " +
+        "it is. Two scenes that say the same thing share one file.\n\n" +
+        "A stopped field says why it gave up early (over_budget, quota_exhausted, " +
+        "rejected_by_api, provider_failed) and detail carries ElevenLabs' own words.",
+      shape: {
+        dir: projectDir,
+        voiceId: z
+          .string()
+          .min(1)
+          .describe("A voice id from fuse_voices — the one the user picked, not a default."),
+        modelId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            `A model id from fuse_voices. Defaults to ${DEFAULT_VOICE_MODEL}, which speaks Thai.`,
+          ),
+        maxCharacters: z
+          .number()
+          .int()
+          .positive()
+          .describe(
+            "Character ceiling for this call. Required: get the figure from a dryRun call and " +
+              "agree it with the user, the same way maxTokens is agreed for the clips.",
+          ),
+        dryRun: z
+          .boolean()
+          .default(false)
+          .describe("Price the script and speak none of it. Nothing is charged or written."),
+        lines: z
+          .array(
+            z.object({
+              slug,
+              text: z
+                .string()
+                .min(1)
+                .describe("Exactly what is said in this scene. Punctuation shapes the delivery."),
+            }),
+          )
+          .min(1)
+          .refine(
+            (list) => new Set(list.map((line) => line.slug)).size === list.length,
+            "two lines in one call cannot share a slug",
+          ),
+      },
+      run: async ({ dir, voiceId, modelId, maxCharacters, dryRun, lines }) => {
+        // The key is checked before the directory: it is the precondition of
+        // this tool existing usefully at all, costs nothing to check, and is
+        // the one a customer has to go and fix somewhere else.
+        const voice = voiceOf(deps);
+        const path = dirOf(dir);
+        // The voiceover belongs beside the clips it is mixed with, so it goes
+        // only into a directory that is already a project of ours.
+        await jobIn(path);
+        const report = await narrate(
+          path,
+          lines,
+          { voiceId, modelId, maxCharacters, dryRun },
+          { voice, probeDuration: deps.scaffold.probeDuration },
+        );
+        return {
+          dir: path,
+          ...report,
+          longestLine: Math.max(...lines.map((line) => characterCount(line.text))),
+          next: report.dryRun
+            ? `Agree ${report.charactersToSpend} characters with the user, then call this again ` +
+              "with dryRun false and maxCharacters set to that figure."
+            : report.stopped
+              ? "Read detail: it holds ElevenLabs' own reason. Nothing further was spoken."
+              : "Place each file in the composition against its scene, then render. On a tier " +
+                "that renders its own audio, mute the model's voice rather than layering this " +
+                "over it.",
         };
       },
     }),

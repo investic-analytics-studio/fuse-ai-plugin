@@ -13,8 +13,10 @@
  * A client with no CLI to ask (Cowork, today) is reported with the steps to do
  * it by hand rather than guessed at.
  *
- * The API key is read from this process's environment and never from argv:
+ * Both API keys are read from this process's environment and never from argv:
  * argv lands in shell history and in every process listing on the machine.
+ * There are two because they are two accounts — Fuse bills the clips, and the
+ * customer's own ElevenLabs account bills the voiceover.
  */
 import { readFileSync } from "node:fs";
 import { ensureDeps, type DepReport, type Runner, type ScaffoldDeps } from "./project/scaffold.ts";
@@ -98,7 +100,9 @@ const BY_HAND: readonly { readonly name: string; readonly steps: readonly string
     steps: [
       "Open Cowork's settings and add a connector that runs in each session,",
       `with the command: ${launchCommand().join(" ")}`,
-      `and the environment variable FUSE_API_KEY set to your key.`,
+      "and the environment variable FUSE_API_KEY set to your Fuse key.",
+      "Add ELEVENLABS_API_KEY too if the ads need a voiceover: that one is your own",
+      "ElevenLabs account, and ElevenLabs bills it, not Fuse.",
     ],
   },
 ];
@@ -120,6 +124,8 @@ export interface InstallReport {
   readonly byHand: readonly { readonly name: string; readonly steps: readonly string[] }[];
   readonly machine: DepReport;
   readonly keyFound: boolean;
+  /** Whether a key for the customer's own ElevenLabs account was in the environment. */
+  readonly voiceKeyFound: boolean;
   readonly notes: readonly string[];
 }
 
@@ -127,15 +133,24 @@ export interface InstallOptions {
   readonly deps: ScaffoldDeps;
   /** Taken from the environment by the caller; never parsed out of argv. */
   readonly apiKey?: string;
+  /** The customer's own ElevenLabs key, read the same way. Optional: no voiceover without it. */
+  readonly voiceKey?: string;
   readonly dryRun?: boolean;
   readonly cwd?: string;
   readonly packageSpec?: string;
 }
 
-/** The key must not end up in a report, a log or an error message. */
-function redact(args: readonly string[], apiKey: string | undefined): string {
-  const text = args.join(" ");
-  return apiKey ? text.split(apiKey).join("***") : text;
+/**
+ * No key may end up in a report, a log or an error message. Every key is
+ * masked, not just the Fuse one: the command line that registers the server
+ * carries both, and a CLI that refuses quotes the command back.
+ */
+function redact(args: readonly string[], keys: readonly (string | undefined)[]): string {
+  let text = args.join(" ");
+  for (const key of keys) {
+    if (key) text = text.split(key).join("***");
+  }
+  return text;
 }
 
 async function hasCli(run: Runner, cli: string, cwd: string): Promise<boolean> {
@@ -150,10 +165,14 @@ async function hasCli(run: Runner, cli: string, cwd: string): Promise<boolean> {
 }
 
 export async function install(options: InstallOptions): Promise<InstallReport> {
-  const { deps, apiKey, dryRun = false } = options;
+  const { deps, apiKey, voiceKey, dryRun = false } = options;
   const cwd = options.cwd ?? process.cwd();
   const launch = launchCommand(options.packageSpec);
-  const env: Record<string, string> = apiKey ? { FUSE_API_KEY: apiKey } : {};
+  const env: Record<string, string> = {
+    ...(apiKey ? { FUSE_API_KEY: apiKey } : {}),
+    ...(voiceKey ? { ELEVENLABS_API_KEY: voiceKey } : {}),
+  };
+  const secrets = [apiKey, voiceKey];
   const results: ClientResult[] = [];
 
   for (const client of CLIENTS) {
@@ -162,7 +181,7 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
       continue;
     }
     const args = client.add(launch, env);
-    const command = `${client.cli} ${redact(args, apiKey)}`;
+    const command = `${client.cli} ${redact(args, secrets)}`;
     const already = await deps.run(client.cli, client.check, cwd);
     if (already.code === 0) {
       results.push({
@@ -187,7 +206,7 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
             client: client.name,
             state: "failed",
             command,
-            detail: redact([added.stderr || added.stdout], apiKey),
+            detail: redact([added.stderr || added.stdout], secrets),
           },
     );
   }
@@ -200,12 +219,21 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
         "quoting work without a key; generating does not. Set FUSE_API_KEY and run this " +
         "installer again to write it in.",
     );
-  } else {
+  }
+  if (!voiceKey) {
+    notes.push(
+      "No ELEVENLABS_API_KEY was set, so the ads will have no voiceover. That is a second " +
+        "account with a second invoice: get a key from elevenlabs.io, set ELEVENLABS_API_KEY " +
+        "and run this installer again. ElevenLabs bills those characters, not Fuse.",
+    );
+  }
+  if (apiKey || voiceKey) {
     // Stated plainly rather than left for the customer to discover: this is a
     // real limitation of key-based auth, not an implementation detail.
     notes.push(
-      "The API key is now stored in each client's own config file on this machine, in plain " +
-        "text. Anything that can read your home directory can read it.",
+      `${apiKey && voiceKey ? "Both API keys are" : "The API key is"} now stored in each ` +
+        "client's own config file on this machine, in plain text. Anything that can read your " +
+        "home directory can read it.",
     );
   }
   if (!machine.ok) {
@@ -220,7 +248,15 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     );
   }
 
-  return { package: selfPackage(), clients: results, byHand: BY_HAND, machine, keyFound: Boolean(apiKey), notes };
+  return {
+    package: selfPackage(),
+    clients: results,
+    byHand: BY_HAND,
+    machine,
+    keyFound: Boolean(apiKey),
+    voiceKeyFound: Boolean(voiceKey),
+    notes,
+  };
 }
 
 const LABEL: Readonly<Record<InstallState, string>> = {

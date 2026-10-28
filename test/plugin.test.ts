@@ -66,6 +66,10 @@ test("the plugin starts the same server, the same way, as the installer", () => 
   // with no key the server still lists tiers and quotes, which is the designed
   // behaviour, and the client shows no missing-variable warning for it.
   assert.equal(server.env.FUSE_API_KEY, "${FUSE_API_KEY:-}");
+  // The voiceover key has to be passed through here as well, or a customer who
+  // installed the plugin rather than running the installer could never have a
+  // voice — the server would start without ever being handed the key they set.
+  assert.equal(server.env.ELEVENLABS_API_KEY, "${ELEVENLABS_API_KEY:-}");
 });
 
 test("the package says it is Apache-2.0 and ships the text that says so", () => {

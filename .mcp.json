@@ -4,7 +4,8 @@
       "command": "npx",
       "args": ["-y", "@fuse-ai/mcp"],
       "env": {
-        "FUSE_API_KEY": "${FUSE_API_KEY:-}"
+        "FUSE_API_KEY": "${FUSE_API_KEY:-}",
+        "ELEVENLABS_API_KEY": "${ELEVENLABS_API_KEY:-}"
       }
     }
   }

@@ -65,7 +65,15 @@ test("the real server starts, lists its tools and answers over stdio", async () 
     const listed = await client.listTools();
     assert.deepEqual(
       listed.tools.map((tool) => tool.name),
-      ["fuse_tiers", "fuse_quote", "fuse_project_new", "fuse_scenes", "fuse_manifest"],
+      [
+        "fuse_tiers",
+        "fuse_quote",
+        "fuse_project_new",
+        "fuse_scenes",
+        "fuse_manifest",
+        "fuse_voices",
+        "fuse_narration",
+      ],
     );
     for (const tool of listed.tools) {
       assert.ok(tool.description, `${tool.name} reached the client without a description`);

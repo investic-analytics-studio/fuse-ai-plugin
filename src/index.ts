@@ -20,8 +20,14 @@ import { z } from "zod";
 import { Catalog } from "./fuse/catalog.ts";
 import { FuseError, FuseHttp, Runs, openClip } from "./fuse/client.ts";
 import type { RunsPort } from "./job/lifecycle.ts";
-import { ffprobeProbe, spawnRunner, type ScaffoldDeps } from "./project/scaffold.ts";
+import {
+  ffprobeDuration,
+  ffprobeProbe,
+  spawnRunner,
+  type ScaffoldDeps,
+} from "./project/scaffold.ts";
 import { createTools, type ToolDefinition } from "./tools.ts";
+import { ElevenLabs, VoiceError, type VoicePort } from "./voice/elevenlabs.ts";
 import { format, install, selfPackage } from "./install.ts";
 
 const DEFAULT_BASE_URL = "https://api.fuseai.art";
@@ -70,6 +76,15 @@ export function requireKey(runs: RunsPort, hasKey: boolean): RunsPort {
   return { submit: refuse, status: refuse };
 }
 
+/**
+ * The customer's ElevenLabs account, when they have given this process a key
+ * for it. No key is a normal state: it is a second account with a second
+ * invoice, and everything but the two voice tools works without one.
+ */
+export function voicePort(apiKey: string | undefined): VoicePort | undefined {
+  return apiKey ? new ElevenLabs({ apiKey }) : undefined;
+}
+
 /** What the model sees when something throws. The server's own words, kept. */
 export function failure(error: unknown): string {
   if (error instanceof z.ZodError) {
@@ -83,6 +98,14 @@ export function failure(error: unknown): string {
     // duration range for a tier or the reference-image limit.
     return (
       `Fuse refused this (${error.kind}): ${error.detail}` +
+      (error.retryable ? "\nThis one is worth trying again." : "")
+    );
+  }
+  if (error instanceof VoiceError) {
+    // Named as ElevenLabs rather than as Fuse, because which account is being
+    // refused decides who the customer has to go and talk to.
+    return (
+      `ElevenLabs refused this (${error.kind}): ${error.detail}` +
       (error.retryable ? "\nThis one is worth trying again." : "")
     );
   }
@@ -110,7 +133,12 @@ function register(server: McpServer, definition: ToolDefinition): void {
 
 function scaffoldDeps(): ScaffoldDeps {
   const runner = spawnRunner();
-  return { run: runner, probe: ffprobeProbe(runner), fetch };
+  return {
+    run: runner,
+    probe: ffprobeProbe(runner),
+    probeDuration: ffprobeDuration(runner),
+    fetch,
+  };
 }
 
 /**
@@ -136,6 +164,7 @@ export async function runInstaller(args: readonly string[]): Promise<void> {
   const report = await install({
     deps: scaffoldDeps(),
     apiKey: process.env.FUSE_API_KEY,
+    voiceKey: process.env.ELEVENLABS_API_KEY,
     dryRun: args.includes("--dry-run"),
     packageSpec: packageSpec(args),
   });
@@ -154,6 +183,7 @@ export async function main(): Promise<void> {
     runs: requireKey(new Runs(http), Boolean(apiKey)),
     openClip,
     scaffold: scaffoldDeps(),
+    voice: voicePort(process.env.ELEVENLABS_API_KEY),
     newJobId: () => randomUUID(),
   });
 

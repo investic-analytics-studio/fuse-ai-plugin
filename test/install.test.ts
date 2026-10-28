@@ -20,6 +20,8 @@ import {
 import type { CommandResult, Runner, ScaffoldDeps } from "../src/project/scaffold.ts";
 
 const KEY = "fuse_sk_live_do_not_log_me";
+/** A second account's key, which must be kept just as quiet as the first. */
+const VOICE_KEY = "xi_sk_live_also_do_not_log_me";
 
 interface Recorder {
   deps: ScaffoldDeps;
@@ -146,6 +148,41 @@ test("the key never appears in anything the installer returns or prints", async 
   assert.match(printed, /\*\*\*/, "the command is still shown, with the key masked");
   // It does reach the CLI, which is the whole point; just not our output.
   assert.ok(argsFor(bench, "claude").includes(`FUSE_API_KEY=${KEY}`));
+});
+
+test("the voiceover key is registered alongside the Fuse one, and masked as well", async () => {
+  // Two accounts, two keys, one command line. The masking is per key rather
+  // than per "the key": the first version of redact() took only the Fuse one,
+  // so an ElevenLabs key would have been printed in full by a CLI that refused.
+  const bench = recorder();
+  const report = await install({ deps: bench.deps, apiKey: KEY, voiceKey: VOICE_KEY });
+
+  assert.ok(argsFor(bench, "claude").includes(`FUSE_API_KEY=${KEY}`));
+  assert.ok(argsFor(bench, "claude").includes(`ELEVENLABS_API_KEY=${VOICE_KEY}`));
+  assert.ok(argsFor(bench, "codex").includes(`ELEVENLABS_API_KEY=${VOICE_KEY}`));
+
+  const printed = format(report);
+  assert.doesNotMatch(printed, new RegExp(VOICE_KEY), "the voice key was printed");
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(VOICE_KEY), "it is in the report");
+  assert.equal(report.voiceKeyFound, true);
+});
+
+test("a failing CLI quotes a command line that holds neither key", async () => {
+  const bench = recorder({ addFails: ["claude"] });
+  const report = await install({ deps: bench.deps, apiKey: KEY, voiceKey: VOICE_KEY });
+  const text = JSON.stringify(report) + format(report);
+  assert.doesNotMatch(text, new RegExp(KEY));
+  assert.doesNotMatch(text, new RegExp(VOICE_KEY));
+});
+
+test("no voiceover key is said out loud, with whose invoice it is", async () => {
+  // Silence here is how a customer gets a finished ad with no voice and no
+  // idea why, so it is a note rather than a thing to notice later.
+  const report = await install({ deps: recorder().deps, apiKey: KEY });
+  assert.equal(report.voiceKeyFound, false);
+  const printed = format(report);
+  assert.match(printed, /ELEVENLABS_API_KEY/);
+  assert.match(printed, /ElevenLabs bills those characters, not Fuse/);
 });
 
 test("a failure from a client CLI is masked too, and reported as its own words", async () => {

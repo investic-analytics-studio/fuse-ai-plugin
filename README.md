@@ -27,6 +27,7 @@ ad playbook and a `/make-ad` command).
 
 ```bash
 export FUSE_API_KEY=...        # omit to install without a key; quoting still works
+export ELEVENLABS_API_KEY=...  # optional, and your own account: voice-over only
 npx -y @fuse-ai/mcp install    # add --dry-run to see the commands without running them
 ```
 
@@ -44,27 +45,38 @@ it safely. It reports a client it cannot find, and prints by-hand steps for a cl
 **One client at a time, by hand:**
 
 ```bash
-claude mcp add fuse -s user -e FUSE_API_KEY=... -- npx -y @fuse-ai/mcp
-codex  mcp add fuse --env FUSE_API_KEY=... -- npx -y @fuse-ai/mcp
+claude mcp add fuse -s user -e FUSE_API_KEY=... -e ELEVENLABS_API_KEY=... -- npx -y @fuse-ai/mcp
+codex  mcp add fuse --env FUSE_API_KEY=... --env ELEVENLABS_API_KEY=... -- npx -y @fuse-ai/mcp
 ```
 
-The key is read from the environment only, never from a command-line argument the installer builds,
-and it is masked in everything the installer prints.
+Both keys are read from the environment only, never from a command-line argument the installer
+builds, and both are masked in everything the installer prints.
+
+### Two keys, because they are two accounts
+
+`FUSE_API_KEY` is Fuse, and it pays for the clips in Fuse tokens. `ELEVENLABS_API_KEY` is **your own
+ElevenLabs account**, and it pays for the voice-over in ElevenLabs characters — a separate bill, from
+a separate company, topped up in a separate place. Leave it out and everything works except the
+voice: the two voice tools refuse with instructions, and the ads come out silent unless you supply
+the audio yourself.
 
 ## The tools
 
-| Tool | What it does | Spends tokens |
+| Tool | What it does | Costs |
 |---|---|---|
-| `fuse_tiers` | What Fuse can generate right now, read live from your account's pricing | no |
-| `fuse_quote` | Token cost of a set of scenes on one tier | no |
-| `fuse_project_new` | Scaffolds a HyperFrames project and binds it to one tier/resolution/aspect | no |
-| `fuse_scenes` | Generates the scenes and downloads the clips. Resumable, never double-charges | **yes** |
-| `fuse_manifest` | Measures the clips with ffprobe and writes the canvas and real durations | no |
+| `fuse_tiers` | What Fuse can generate right now, read live from your account's pricing | nothing |
+| `fuse_quote` | Token cost of a set of scenes on one tier | nothing |
+| `fuse_project_new` | Scaffolds a HyperFrames project and binds it to one tier/resolution/aspect | nothing |
+| `fuse_scenes` | Generates the scenes and downloads the clips. Resumable, never double-charges | **Fuse tokens** |
+| `fuse_manifest` | Measures the clips with ffprobe and writes the canvas and real durations | nothing |
+| `fuse_voices` | The voices and models on *your* ElevenLabs account, and the characters left | nothing |
+| `fuse_narration` | Speaks the script into `assets/audio/`. Resumable, never double-charges | **your ElevenLabs characters** |
 
-Nothing here hardcodes a tier, a price or a resolution: they come from the account's own pricing on
-every call, so a change on our side reaches you without a package update.
+Nothing here hardcodes a tier, a price, a resolution or a voice: they come from the account's own
+pricing — or your own ElevenLabs account — on every call, so a change on our side reaches you without
+a package update.
 
-`fuse_scenes` is the only tool that spends anything. Its `maxTokens` is a ceiling on the whole
+`fuse_scenes` is the only tool that spends Fuse tokens. Its `maxTokens` is a ceiling on the whole
 project, already-spent included, and it refuses rather than overshoot. It blocks for 90 seconds and
 then reports progress; calling it again with the same arguments waits on instead of starting over, so
 a crash, a closed client or a top-up all resume where you left off, free.
@@ -78,8 +90,13 @@ a crash, a closed client or a top-up all resume where you left off, free.
   from `fuse_quote` first.
 - **Image-to-video needs image URLs the API can fetch itself.** A file on your disk cannot be sent:
   uploads are session-authenticated too. Text-to-video tiers are unaffected.
-- **No audio.** This package generates picture only. Voice-over, music and SFX come from you and are
-  mixed in the editing step.
+- **Voice-over is billed by ElevenLabs, not by us.** `fuse_narration` runs on your own ElevenLabs
+  account. Call it with `dryRun: true` first: that prices the script in characters and spends
+  nothing. Re-running a line you have already spoken is free, and renaming a scene is free; changing
+  one word of a line is new audio and is charged again.
+- **Music and SFX are still yours to supply.** The package speaks a script; it does not write music,
+  ambience or sound effects. Some tiers do render their own audio, which can be a different voice in
+  every scene — so that is not an answer to "who narrates this".
 - **A quote is a floor, not a cap.** You are charged on the clip the provider returns, which can run
   slightly longer than the duration asked for.
 
