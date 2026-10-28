@@ -312,7 +312,20 @@ test("a registration in another scope is reported, not silently shadowed", async
   const note = report.notes.find((text) => text.includes("Project config"));
   assert.ok(note, `no note about the shadowing scope; notes were ${JSON.stringify(report.notes)}`);
   assert.match(note, /reads the keys from the environment/);
+  // The flag is derived from the scope the client named, so the advice is
+  // something the customer can run.
+  assert.match(note, /claude mcp remove fuse -s project/);
   assert.doesNotMatch(format(report), new RegExp(KEY));
+});
+
+test("nobody is told to run a command that prints their key", async () => {
+  // `claude mcp get` dumps every environment variable it holds in clear text,
+  // the API key included. An earlier version of the note above sent customers
+  // there to find the removal command, which is telling them to put their own
+  // credential on screen and into their shell's scrollback.
+  const bench = recorder({ scope: "Project config (shared via .mcp.json)" });
+  const report = await install({ deps: bench.deps, apiKey: KEY, voiceKey: VOICE_KEY });
+  assert.doesNotMatch(format(report), /mcp get/, "the output sends the customer to `mcp get`");
 });
 
 test("a registration in our own scope is not reported as a problem", async () => {

@@ -185,6 +185,25 @@ function redact(args: readonly string[], keys: readonly (string | undefined)[]):
   return text;
 }
 
+/** The scopes Claude Code names, and the flag that addresses each one. */
+const KNOWN_SCOPES = ["local", "project", "user", "dynamic"];
+
+/**
+ * How to remove a registration the client reports under `scope`.
+ *
+ * The scope's own first word is the flag ("Project config (shared via
+ * .mcp.json)" → `-s project`), which is worth deriving rather than pointing
+ * the customer at `claude mcp get`: that command prints every environment
+ * variable it holds — the API key included — in clear text. Telling someone
+ * to run it is telling them to put their key on screen and in their scrollback.
+ */
+function removalOf(client: ClientSpec, scope: string): string {
+  const first = /^([a-z]+)/.exec(scope.toLowerCase())?.[1];
+  return first && KNOWN_SCOPES.includes(first)
+    ? `\`${client.cli} mcp remove ${SERVER_NAME} -s ${first}\``
+    : `whatever ${client.name} offers for that scope`;
+}
+
 async function hasCli(run: Runner, cli: string, cwd: string): Promise<boolean> {
   try {
     const result = await run(cli, ["--version"], cwd);
@@ -256,8 +275,8 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
         `${client.name} reports ${SERVER_NAME} under "${scope}", not ${client.writesTo} config, ` +
           "so that is the registration it starts — and it reads the keys from the environment " +
           `it is launched from, not from the one just written. Either set FUSE_API_KEY (and ` +
-          "ELEVENLABS_API_KEY) there, or drop that registration: " +
-          `\`${client.cli} mcp get ${SERVER_NAME}\` prints the exact command to remove it.`,
+          "ELEVENLABS_API_KEY) there, or drop that registration with " +
+          `${removalOf(client, scope)}.`,
       );
     }
   }
