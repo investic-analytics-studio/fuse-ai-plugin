@@ -1,0 +1,8 @@
+node_modules/
+
+# `npm pack` output
+*.tgz
+
+# Never let a key near a commit; the server takes it from the environment only.
+.env
+.env.*

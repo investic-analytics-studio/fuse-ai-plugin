@@ -1,0 +1,45 @@
+{
+  "name": "@fuse-ai/mcp",
+  "version": "0.0.0",
+  "description": "Fuse AI tools for coding agents: generate video scenes with Fuse, edit them locally with HyperFrames.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "fuse-mcp": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:live": "node --experimental-strip-types --test test/catalog.test.ts"
+  },
+  "files": [
+    "src",
+    "skills",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "author": "Fuse AI",
+  "homepage": "https://www.fuseai.art/en/developer/api-docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/investic-analytics-studio/fuse-ai-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/investic-analytics-studio/fuse-ai-plugin/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "cross-spawn": "^7.0.6",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}

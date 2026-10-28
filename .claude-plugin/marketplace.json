@@ -1,0 +1,15 @@
+{
+  "name": "fuse-ai-plugin",
+  "description": "Fuse AI's own plugin: video generation through Fuse, editing and rendering on your machine.",
+  "owner": {
+    "name": "Fuse AI",
+    "url": "https://www.fuseai.art"
+  },
+  "plugins": [
+    {
+      "name": "fuse",
+      "source": "./",
+      "description": "Make a product ad end to end: analyse, plan, generate the scenes with Fuse, then edit and render locally with HyperFrames."
+    }
+  ]
+}

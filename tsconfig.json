@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    // `bin` points straight at src/index.ts and Node strips the types, so
+    // nothing here emits. These three keep the source strippable: imports
+    // carry their real `.ts` extension, `import type` stays explicit, and
+    // syntax Node cannot erase (enums, parameter properties) is refused.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  // Checked on purpose by test/types.test.ts, which expects it to be refused.
+  "exclude": ["test/fixtures/types"]
+}

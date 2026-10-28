@@ -1,0 +1,11 @@
+# Every text file stays LF in the working tree, on Windows too.
+#
+# `bin` is src/index.ts and it starts with a shebang. A clone on a machine with
+# core.autocrlf=true would turn that line into "#!/usr/bin/env node<CR>", and a
+# publish from that clone ships it: macOS and Linux then look for an interpreter
+# named "node\r" and the command dies with a message about a bad interpreter.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.woff2 binary

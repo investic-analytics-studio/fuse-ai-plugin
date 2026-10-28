@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "fuse": {
+      "command": "npx",
+      "args": ["-y", "@fuse-ai/mcp"],
+      "env": {
+        "FUSE_API_KEY": "${FUSE_API_KEY:-}"
+      }
+    }
+  }
+}
