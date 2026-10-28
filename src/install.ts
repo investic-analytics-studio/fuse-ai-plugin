@@ -47,15 +47,36 @@ export function launchCommand(spec = selfPackage().name): readonly string[] {
   return ["npx", "-y", spec];
 }
 
+/** Where our registration lives in Claude Code, in that CLI's own wording. */
+const CLAUDE_SCOPE = "User";
+
 interface ClientSpec {
   readonly id: string;
   readonly name: string;
   /** The CLI that owns this client's config. */
   readonly cli: string;
-  /** Exits 0 only when our server is already registered. */
-  readonly check: readonly string[];
+  /**
+   * Clears our own registration, at the one scope we write to, before adding.
+   *
+   * Only for a client whose `add` will not overwrite. `claude mcp add` on a
+   * name it already holds prints "already exists", changes nothing, and
+   * **exits 0** — so without this, rotating a key would silently do nothing
+   * and report success. `codex mcp add` replaces what is there, so it has none.
+   */
+  clear?(): readonly string[];
   /** The add command, given the environment the server should start with. */
   add(launch: readonly string[], env: Readonly<Record<string, string>>): readonly string[];
+  /**
+   * Asks the client what it holds now. Exits non-zero when it holds nothing,
+   * which is the only trustworthy signal either CLI gives us: both exit 0 for
+   * refusals as well as successes, so the install is confirmed by asking
+   * rather than by reading an exit code.
+   */
+  readonly inspect: readonly string[];
+  /** Reads the scope out of `inspect`'s text, for a client that has scopes. */
+  scopeOf?(output: string): string | undefined;
+  /** The scope `add` writes to, when the client has more than one. */
+  readonly writesTo?: string;
 }
 
 const CLIENTS: readonly ClientSpec[] = [
@@ -63,7 +84,7 @@ const CLIENTS: readonly ClientSpec[] = [
     id: "claude-code",
     name: "Claude Code",
     cli: "claude",
-    check: ["mcp", "get", SERVER_NAME],
+    clear: () => ["mcp", "remove", SERVER_NAME, "-s", "user"],
     add: (launch, env) => [
       "mcp",
       "add",
@@ -76,12 +97,15 @@ const CLIENTS: readonly ClientSpec[] = [
       "--",
       ...launch,
     ],
+    inspect: ["mcp", "get", SERVER_NAME],
+    // "  Scope: Project config (shared via .mcp.json)"
+    scopeOf: (output) => /^\s*Scope:\s*(.+)$/m.exec(output)?.[1]?.trim(),
+    writesTo: CLAUDE_SCOPE,
   },
   {
     id: "codex",
     name: "Codex CLI",
     cli: "codex",
-    check: ["mcp", "get", SERVER_NAME],
     add: (launch, env) => [
       "mcp",
       "add",
@@ -90,6 +114,7 @@ const CLIENTS: readonly ClientSpec[] = [
       "--",
       ...launch,
     ],
+    inspect: ["mcp", "get", SERVER_NAME],
   },
 ];
 
@@ -107,7 +132,14 @@ const BY_HAND: readonly { readonly name: string; readonly steps: readonly string
   },
 ];
 
-export type InstallState = "installed" | "already" | "failed" | "absent" | "would-install";
+/**
+ * There is deliberately no "already registered" state any more. Refusing when
+ * the name was taken is what made the installer unable to change a key — and
+ * it refused on a name found in *any* scope, including the `.mcp.json` this
+ * package ships, so running it from a directory holding one reported success
+ * and set no key at all.
+ */
+export type InstallState = "installed" | "failed" | "absent" | "would-install";
 
 export interface ClientResult {
   readonly client: string;
@@ -174,6 +206,7 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
   };
   const secrets = [apiKey, voiceKey];
   const results: ClientResult[] = [];
+  const shadowed: string[] = [];
 
   for (const client of CLIENTS) {
     if (!(await hasCli(deps.run, client.cli, cwd))) {
@@ -182,37 +215,55 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     }
     const args = client.add(launch, env);
     const command = `${client.cli} ${redact(args, secrets)}`;
-    const already = await deps.run(client.cli, client.check, cwd);
-    if (already.code === 0) {
-      results.push({
-        client: client.name,
-        state: "already",
-        command,
-        detail:
-          `${SERVER_NAME} is already registered in ${client.name}. To change it, run ` +
-          `\`${client.cli} mcp remove ${SERVER_NAME}\` first.`,
-      });
-      continue;
-    }
     if (dryRun) {
       results.push({ client: client.name, state: "would-install", command });
       continue;
     }
+
+    // Written, not merely added: running this again is how a customer rotates
+    // a key, and it has to end with the keys they just set rather than with
+    // whatever was registered first.
+    if (client.clear) await deps.run(client.cli, client.clear(), cwd);
     const added = await deps.run(client.cli, args, cwd);
-    results.push(
-      added.code === 0
-        ? { client: client.name, state: "installed", command }
-        : {
-            client: client.name,
-            state: "failed",
-            command,
-            detail: redact([added.stderr || added.stdout], secrets),
-          },
-    );
+    const seen = await deps.run(client.cli, client.inspect, cwd);
+    if (added.code !== 0 || seen.code !== 0) {
+      // Two different failures, and saying which is which is the difference
+      // between "that CLI refused, here is what it said" and "that CLI claimed
+      // success and then had nothing to show for it".
+      const why =
+        added.code !== 0
+          ? added.stderr || added.stdout || `${client.cli} refused without saying why`
+          : `${client.cli} exited 0 but then reported nothing registered under ` +
+            SERVER_NAME +
+            (added.stdout.trim() ? `; it said: ${added.stdout.trim()}` : "");
+      results.push({
+        client: client.name,
+        state: "failed",
+        command,
+        detail: redact([why], secrets),
+      });
+      continue;
+    }
+    results.push({ client: client.name, state: "installed", command });
+
+    // A registration in another scope wins over the one just written, and
+    // starts the server with whatever the environment holds instead of the
+    // keys above. Saying "installed" and leaving that unsaid is how a customer
+    // ends up with a server that has no key and a report that looked fine.
+    const scope = client.scopeOf?.(seen.stdout);
+    if (scope && client.writesTo && !scope.includes(client.writesTo)) {
+      shadowed.push(
+        `${client.name} reports ${SERVER_NAME} under "${scope}", not ${client.writesTo} config, ` +
+          "so that is the registration it starts — and it reads the keys from the environment " +
+          `it is launched from, not from the one just written. Either set FUSE_API_KEY (and ` +
+          "ELEVENLABS_API_KEY) there, or drop that registration: " +
+          `\`${client.cli} mcp get ${SERVER_NAME}\` prints the exact command to remove it.`,
+      );
+    }
   }
 
   const machine = await ensureDeps(cwd, deps);
-  const notes: string[] = [];
+  const notes: string[] = [...shadowed];
   if (!apiKey) {
     notes.push(
       "No FUSE_API_KEY was set, so the server was registered without one. Listing tiers and " +
@@ -261,7 +312,6 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
 
 const LABEL: Readonly<Record<InstallState, string>> = {
   installed: "installed",
-  already: "already there",
   failed: "FAILED",
   absent: "not on this machine",
   "would-install": "would install",

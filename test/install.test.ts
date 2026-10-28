@@ -26,20 +26,38 @@ const VOICE_KEY = "xi_sk_live_also_do_not_log_me";
 interface Recorder {
   deps: ScaffoldDeps;
   calls: Array<{ command: string; args: readonly string[] }>;
+  /** The add whose arguments actually took effect, per CLI. */
+  effective: Map<string, readonly string[]>;
 }
 
 /**
- * `present` names the CLIs this machine is pretending to have; `configured`
- * names the ones that already know about us.
+ * A stand-in for the two client CLIs, modelled on what they really do —
+ * measured, because what they really do is the whole reason this code exists:
+ *
+ *   - `claude mcp add` on a name it already holds prints "already exists",
+ *     changes nothing and **exits 0**. An installer that trusts the exit code
+ *     reports success and leaves the old key in place.
+ *   - `codex mcp add` overwrites, and exits 0.
+ *   - both `remove` commands exit 0 whether or not there was anything there.
+ *   - `mcp get` is the only one that exits non-zero for "nothing registered",
+ *     and it is scope-blind: it answers about any scope, naming the scope in
+ *     its text.
+ *
+ * `configured` names the CLIs that already hold a registration; `scope` makes
+ * Claude Code report it under something other than User config, the way a
+ * `.mcp.json` in the directory does.
  */
 function recorder(options: {
   present?: readonly string[];
   configured?: readonly string[];
   addFails?: readonly string[];
   missingThrows?: boolean;
+  scope?: string;
 } = {}): Recorder {
   const present = options.present ?? ["claude", "codex", "npx"];
   const calls: Array<{ command: string; args: readonly string[] }> = [];
+  const effective = new Map<string, readonly string[]>();
+  const held = new Set(options.configured ?? []);
   const run: Runner = async (command, args): Promise<CommandResult> => {
     calls.push({ command, args });
     if (!present.includes(command)) {
@@ -49,18 +67,34 @@ function recorder(options: {
       return { code: 1, stdout: "", stderr: `'${command}' is not recognized` };
     }
     if (args[0] === "mcp" && args[1] === "get") {
-      const configured = options.configured ?? [];
-      return configured.includes(command)
-        ? { code: 0, stdout: `${SERVER_NAME}: npx -y @fuse-ai/mcp`, stderr: "" }
-        : { code: 1, stdout: "", stderr: `No MCP server named '${SERVER_NAME}'.` };
+      if (!held.has(command)) {
+        return { code: 1, stdout: "", stderr: `No MCP server named '${SERVER_NAME}'.` };
+      }
+      const scope = command === "claude" ? `\n  Scope: ${options.scope ?? "User config"}` : "";
+      return { code: 0, stdout: `${SERVER_NAME}:${scope}\n  Command: npx`, stderr: "" };
     }
-    if (args[0] === "mcp" && args[1] === "add" && (options.addFails ?? []).includes(command)) {
-      return { code: 1, stdout: "", stderr: "EACCES: permission denied, open config" };
+    if (args[0] === "mcp" && args[1] === "remove") {
+      held.delete(command);
+      effective.delete(command);
+      return { code: 0, stdout: `Removed ${SERVER_NAME}`, stderr: "" };
+    }
+    if (args[0] === "mcp" && args[1] === "add") {
+      if ((options.addFails ?? []).includes(command)) {
+        return { code: 1, stdout: "", stderr: "EACCES: permission denied, open config" };
+      }
+      // Claude Code will not overwrite; Codex will.
+      if (held.has(command) && command === "claude") {
+        return { code: 0, stdout: `MCP server ${SERVER_NAME} already exists`, stderr: "" };
+      }
+      held.add(command);
+      effective.set(command, args);
+      return { code: 0, stdout: `Added ${SERVER_NAME}`, stderr: "" };
     }
     return { code: 0, stdout: "ok", stderr: "" };
   };
   return {
     calls,
+    effective,
     deps: {
       run,
       probe: async () => assert.fail("the installer has no clip to measure"),
@@ -213,20 +247,82 @@ test("with a key it says where the key now lives", async () => {
   assert.match(report.notes.join("\n"), /stored in each client's own config file/);
 });
 
-/* ------------------------------------------------------------- idempotence */
+/* --------------------------------------------------------------- rewriting */
 
-test("a client that already knows about us is left alone", async () => {
-  const bench = recorder({ configured: ["claude"] });
-  const report = await install({ deps: bench.deps, apiKey: KEY });
+test("running it again writes the new key instead of leaving the old one", async () => {
+  // How a customer rotates a key, and it used to be impossible: the installer
+  // saw the name was taken and stopped, so the report said "already there" and
+  // the server kept starting with the key from before. The CLI is no help —
+  // `claude mcp add` on a name it holds exits 0 and changes nothing — so the
+  // registration has to be cleared first.
+  const bench = recorder({ configured: ["claude", "codex"] });
+  const report = await install({ deps: bench.deps, apiKey: "fuse_sk_the_new_one" });
 
-  assert.equal(state(report, "Claude Code"), "already");
-  assert.equal(
-    bench.calls.some((call) => call.command === "claude" && call.args[1] === "add"),
-    false,
-    "re-adding would need a remove first; the installer must not try",
+  assert.equal(state(report, "Claude Code"), "installed");
+  assert.ok(
+    bench.effective.get("claude")?.includes("FUSE_API_KEY=fuse_sk_the_new_one"),
+    "the add that took effect did not carry the new key",
   );
-  assert.match(report.clients[0]!.detail!, /claude mcp remove fuse/);
-  assert.equal(state(report, "Codex CLI"), "installed");
+  assert.ok(
+    bench.calls.some(
+      (call) => call.command === "claude" && call.args[1] === "remove" && call.args.includes("user"),
+    ),
+    "the old registration was never cleared, so the new key went nowhere",
+  );
+});
+
+test("only the scope we write to is ever cleared", async () => {
+  // `claude mcp remove` without a scope would take whichever one it finds
+  // first, and a project `.mcp.json` is not ours to delete.
+  const bench = recorder();
+  await install({ deps: bench.deps, apiKey: KEY });
+  const removes = bench.calls.filter(
+    (call) => call.command === "claude" && call.args[1] === "remove",
+  );
+  assert.equal(removes.length, 1);
+  assert.deepEqual([...removes[0]!.args], ["mcp", "remove", "fuse", "-s", "user"]);
+});
+
+test("the install is confirmed by asking the client, not by an exit code", async () => {
+  // Both CLIs exit 0 for refusals as well as successes, so a 0 from `add` is
+  // not evidence of anything. This is what catches an add that quietly did
+  // nothing: the client is asked afterwards and says it holds nothing.
+  const bench = recorder();
+  const brokenRun: Runner = async (command, args) => {
+    if (args[0] === "mcp" && args[1] === "add") {
+      return { code: 0, stdout: "something went wrong but exited 0 anyway", stderr: "" };
+    }
+    return bench.deps.run(command, args, ".");
+  };
+  const report = await install({ deps: { ...bench.deps, run: brokenRun }, apiKey: KEY });
+  assert.equal(state(report, "Claude Code"), "failed");
+  assert.match(report.clients[0]!.detail!, /nothing registered/);
+});
+
+test("a registration in another scope is reported, not silently shadowed", async () => {
+  // Measured on a real machine: with the server in both user scope and a
+  // project `.mcp.json`, `claude mcp get` answers "Scope: Project config" —
+  // that one wins, and it takes its keys from the environment. Reporting
+  // "installed" and stopping there hands the customer a keyless server and a
+  // clean bill of health.
+  const bench = recorder({ scope: "Project config (shared via .mcp.json)" });
+  const report = await install({ deps: bench.deps, apiKey: KEY, voiceKey: VOICE_KEY });
+
+  assert.equal(state(report, "Claude Code"), "installed");
+  const note = report.notes.find((text) => text.includes("Project config"));
+  assert.ok(note, `no note about the shadowing scope; notes were ${JSON.stringify(report.notes)}`);
+  assert.match(note, /reads the keys from the environment/);
+  assert.doesNotMatch(format(report), new RegExp(KEY));
+});
+
+test("a registration in our own scope is not reported as a problem", async () => {
+  const bench = recorder({ scope: "User config" });
+  const report = await install({ deps: bench.deps, apiKey: KEY });
+  assert.equal(
+    report.notes.some((text) => text.includes("Scope") || text.includes("User config")),
+    false,
+    "the normal case must not warn about itself",
+  );
 });
 
 test("a dry run runs the checks and changes nothing", async () => {
