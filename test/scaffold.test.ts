@@ -16,6 +16,7 @@ import {
   ensureDeps,
   ffprobeProbe,
   installFonts,
+  readRate,
   spawnRunner,
   writeManifest,
   type ClipBox,
@@ -48,8 +49,10 @@ function recorder(result: (spawned: Spawned) => CommandResult = () => OK): {
 
 /** The pixel boxes really measured on prod, per tier. */
 const BOXES: Record<string, ClipBox> = {
-  "scene-a": { width: 864, height: 480, seconds: 5.167 }, // MiniMax H3, 480p 16:9
-  "scene-b": { width: 832, height: 480, seconds: 6.583 }, // WaveSpeed, same 480p 16:9
+  // MiniMax H3, 480p 16:9 — and it really does come back with sound on it.
+  "scene-a": { width: 864, height: 480, seconds: 5.167, fps: 24, hasAudio: true },
+  // WaveSpeed, the same nominal 480p 16:9, at a different box and a different rate.
+  "scene-b": { width: 832, height: 480, seconds: 6.583, fps: 30, hasAudio: false },
 };
 
 const deps = (run: Runner): ScaffoldDeps => ({
@@ -176,6 +179,22 @@ test("the canvas is the biggest clip, and the durations are the provider's", asy
   assert.equal(manifest.totalSeconds, 11.75);
   assert.equal(manifest.scenes.length, 2, "a scene still rendering is not in the manifest");
   assert.match(manifest.note, /upscales the footage/);
+  // The fastest clip sets the rate, as the largest box sets the canvas: render
+  // at 24 and the 30 fps clip loses frames it was paid for.
+  assert.equal(manifest.fps, 30);
+  assert.deepEqual(
+    manifest.scenes.map((scene) => scene.fps),
+    [24, 30],
+    "each clip keeps its own rate, so a mixed project can be seen to be mixed",
+  );
+  // One clip came back with sound. Silence is then a decision, not a default.
+  assert.equal(manifest.hasAudio, true);
+  assert.deepEqual(
+    manifest.scenes.map((scene) => scene.hasAudio),
+    [true, false],
+  );
+  assert.match(manifest.note, /data-fps/);
+  assert.match(manifest.note, /instead of muting/);
 
   const written = JSON.parse(await readFile(join(dir, "assets", "scenes", "manifest.json"), "utf8"));
   assert.deepEqual(written.canvas, manifest.canvas);
@@ -194,19 +213,56 @@ test("measuring before anything has rendered is refused, not guessed", async () 
   await assert.rejects(() => writeManifest(dir, job, deps(run)), /nothing to measure/);
 });
 
-test("ffprobe's own output is read for the box and the length", async () => {
-  // Copied from a real run against one of the downloaded clips.
+test("ffprobe's own output is read for the box, the length, the rate and the sound", async () => {
+  // Copied from a real run against one of the clips downloaded on 2026-10-29:
+  // the tier returns an audio stream alongside the picture.
   const real = `{
     "programs": [],
     "stream_groups": [],
-    "streams": [ { "width": 864, "height": 480 } ],
+    "streams": [
+      { "codec_type": "video", "width": 864, "height": 480, "r_frame_rate": "24/1" },
+      { "codec_type": "audio", "r_frame_rate": "0/0" }
+    ],
     "format": { "duration": "5.167000" }
   }`;
   const { run, calls } = recorder(() => ({ code: 0, stdout: real, stderr: "" }));
   const box = await ffprobeProbe(run)("scene-a.mp4");
 
-  assert.deepEqual(box, { width: 864, height: 480, seconds: 5.167 });
-  assert.ok(calls[0]!.args.includes("stream=width,height"));
+  assert.deepEqual(box, { width: 864, height: 480, seconds: 5.167, fps: 24, hasAudio: true });
+  assert.ok(calls[0]!.args.includes("stream=codec_type,width,height,r_frame_rate"));
+  assert.equal(
+    calls[0]!.args.includes("v:0"),
+    false,
+    "asking for the video stream alone is how the audio went unnoticed",
+  );
+});
+
+test("a clip that came back without sound is reported as such, not assumed", async () => {
+  const silent = `{
+    "streams": [ { "codec_type": "video", "width": 864, "height": 480, "r_frame_rate": "24/1" } ],
+    "format": { "duration": "5.167000" }
+  }`;
+  const { run } = recorder(() => ({ code: 0, stdout: silent, stderr: "" }));
+  assert.equal((await ffprobeProbe(run)("scene-a.mp4")).hasAudio, false);
+});
+
+test("a rate ffprobe cannot state is left unstated rather than guessed at 30", async () => {
+  const noRate = `{
+    "streams": [ { "codec_type": "video", "width": 864, "height": 480, "r_frame_rate": "0/0" } ],
+    "format": { "duration": "5.167000" }
+  }`;
+  const { run } = recorder(() => ({ code: 0, stdout: noRate, stderr: "" }));
+  const box = await ffprobeProbe(run)("scene-a.mp4");
+  assert.equal(box.fps, undefined);
+  assert.equal("fps" in box, false, "an absent rate is absent, not a null to be rendered at");
+});
+
+test("NTSC rationals survive the read", () => {
+  assert.equal(readRate("30000/1001"), 29.97);
+  assert.equal(readRate("24000/1001"), 23.976);
+  assert.equal(readRate("25"), 25);
+  assert.equal(readRate("0/0"), undefined);
+  assert.equal(readRate(undefined), undefined);
 });
 
 test("an audio-only or broken file is reported, not silently sized", async () => {

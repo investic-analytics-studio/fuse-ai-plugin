@@ -113,9 +113,16 @@ function harness(
     probe:
       options.probe ??
       (async (file: string) => {
-        // The two boxes really measured on prod for the same nominal 480p 16:9.
+        // The two boxes really measured on prod for the same nominal 480p 16:9,
+        // at the rate and with the sound those clips really carried.
         const wide = file.includes("scene-a");
-        return { width: wide ? 864 : 832, height: 480, seconds: wide ? 5.167 : 6.583 };
+        return {
+          width: wide ? 864 : 832,
+          height: 480,
+          seconds: wide ? 5.167 : 6.583,
+          fps: 24,
+          hasAudio: true,
+        };
       }),
     fetch:
       options.fetch ??
@@ -494,6 +501,8 @@ test("the manifest reports the measured canvas, not one derived from the tier", 
   await bench.tool("fuse_scenes").run({ dir, maxTokens: 500, scenes: SCENES });
   const manifest = (await bench.tool("fuse_manifest").run({ dir })) as {
     canvas: { width: number; height: number };
+    fps?: number;
+    hasAudio: boolean;
     totalSeconds: number;
     scenes: Array<{ slug: string; seconds: number }>;
     file: string;
@@ -503,9 +512,16 @@ test("the manifest reports the measured canvas, not one derived from the tier", 
   assert.deepEqual(manifest.canvas, { width: 864, height: 480 });
   assert.deepEqual(manifest.scenes.map((scene) => scene.seconds), [5.167, 6.583]);
   assert.equal(manifest.totalSeconds, 11.75);
+  // The two facts a composition cannot be written correctly without, and that
+  // the first prod run was delivered wrong for want of: the rate to render at,
+  // and that the clips arrived with sound already paid for.
+  assert.equal(manifest.fps, 24);
+  assert.equal(manifest.hasAudio, true);
 
   const written = JSON.parse(await readFile(join(dir, manifest.file), "utf8"));
   assert.deepEqual(written.canvas, manifest.canvas);
+  assert.equal(written.fps, 24);
+  assert.equal(written.hasAudio, true);
 });
 
 test("asking for a manifest before any clip exists says so plainly", async () => {

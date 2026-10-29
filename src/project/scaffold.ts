@@ -52,6 +52,14 @@ export interface ClipBox {
   readonly width: number;
   readonly height: number;
   readonly seconds: number;
+  /**
+   * The clip's own frame rate. Absent when ffprobe did not report a usable
+   * one, which is the honest answer: a guessed rate is the same mistake as a
+   * guessed canvas, one axis over.
+   */
+  readonly fps?: number;
+  /** Whether the provider returned sound on the clip. */
+  readonly hasAudio: boolean;
 }
 
 /** Reads a clip's real box and length. Injected for the same reason. */
@@ -209,10 +217,16 @@ export interface ManifestScene {
   readonly width: number;
   readonly height: number;
   readonly seconds: number;
+  readonly fps?: number;
+  readonly hasAudio: boolean;
 }
 
 export interface Manifest {
   readonly canvas: { readonly width: number; readonly height: number };
+  /** The rate to render at. Absent when no clip reported one. */
+  readonly fps?: number;
+  /** True when any clip came back with sound on it. */
+  readonly hasAudio: boolean;
   readonly totalSeconds: number;
   readonly scenes: readonly ManifestScene[];
   readonly note: string;
@@ -244,19 +258,34 @@ export async function writeManifest(dir: string, job: Job, deps: ScaffoldDeps): 
       width: box.width,
       height: box.height,
       seconds: box.seconds,
+      ...(box.fps === undefined ? {} : { fps: box.fps }),
+      hasAudio: box.hasAudio,
     });
   }
+  // The fastest clip sets the rate, for the same reason the largest box sets
+  // the canvas: rendering below a clip's own rate throws its frames away.
+  const rates = scenes
+    .map((scene) => scene.fps)
+    .filter((fps): fps is number => typeof fps === "number" && fps > 0);
+  const fps = rates.length === 0 ? undefined : Math.max(...rates);
   const manifest: Manifest = {
     canvas: {
       width: Math.max(...scenes.map((scene) => scene.width)),
       height: Math.max(...scenes.map((scene) => scene.height)),
     },
+    ...(fps === undefined ? {} : { fps }),
+    hasAudio: scenes.some((scene) => scene.hasAudio),
     totalSeconds: Number(scenes.reduce((sum, scene) => sum + scene.seconds, 0).toFixed(3)),
     scenes,
     note:
       "Measured from the clips themselves. Use this canvas for the composition's " +
       "data-width/data-height, the CSS box and the viewport meta: a larger canvas " +
-      "upscales the footage and multiplies render time.",
+      "upscales the footage and multiplies render time. Render at this fps too, " +
+      "as the root's data-fps: HyperFrames renders at 30 unless told otherwise, " +
+      "and 24 fps footage rendered at 30 carries a duplicate of every fifth frame. " +
+      "hasAudio is what the provider actually returned, not what the tier promises: " +
+      "when it is true the clips carry sound that was paid for, so keep it on the " +
+      "<video> (data-has-audio) instead of muting it, unless silence was asked for.",
   };
   await mkdir(join(dir, SCENE_DIR), { recursive: true });
   await writeFile(join(dir, MANIFEST), `${JSON.stringify(manifest, undefined, 2)}\n`, "utf8");
@@ -272,10 +301,9 @@ export function ffprobeProbe(run: Runner): Probe {
       [
         "-v",
         "error",
-        "-select_streams",
-        "v:0",
+        // Every stream, not just v:0 — the audio stream is half the answer.
         "-show_entries",
-        "stream=width,height",
+        "stream=codec_type,width,height,r_frame_rate",
         "-show_entries",
         "format=duration",
         "-of",
@@ -288,16 +316,46 @@ export function ffprobeProbe(run: Runner): Probe {
       throw new Error(`ffprobe could not read ${file}: ${result.stderr || result.stdout}`);
     }
     const parsed = JSON.parse(result.stdout) as {
-      streams?: Array<{ width?: number; height?: number }>;
+      streams?: Array<{
+        codec_type?: string;
+        width?: number;
+        height?: number;
+        r_frame_rate?: string;
+      }>;
       format?: { duration?: string };
     };
-    const stream = parsed.streams?.[0];
+    const streams = parsed.streams ?? [];
+    const stream = streams.find((candidate) => candidate.width && candidate.height);
     const seconds = Number(parsed.format?.duration);
     if (!stream?.width || !stream.height || !Number.isFinite(seconds)) {
       throw new Error(`ffprobe read ${file} but found no video stream in it`);
     }
-    return { width: stream.width, height: stream.height, seconds };
+    const fps = readRate(stream.r_frame_rate);
+    return {
+      width: stream.width,
+      height: stream.height,
+      seconds,
+      ...(fps === undefined ? {} : { fps }),
+      hasAudio: streams.some((candidate) => candidate.codec_type === "audio"),
+    };
   };
+}
+
+/**
+ * ffprobe states a frame rate as a rational: "24/1", "30000/1001". A container
+ * that has none says "0/0", and that is not a rate to render at — it comes back
+ * undefined so the caller can say it does not know instead of rendering at 30.
+ */
+export function readRate(rate: string | undefined): number | undefined {
+  if (!rate) return undefined;
+  const [top, bottom] = rate.split("/");
+  const numerator = Number(top);
+  const denominator = bottom === undefined ? 1 : Number(bottom);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+    return undefined;
+  }
+  const fps = numerator / denominator;
+  return fps > 0 ? Number(fps.toFixed(3)) : undefined;
 }
 
 /**

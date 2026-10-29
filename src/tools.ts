@@ -389,14 +389,22 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
 
     tool({
       name: "fuse_manifest",
-      title: "Measure the clips and report the canvas to compose on",
+      title: "Measure the clips and report the canvas, rate and sound to compose on",
       description:
         "Reads every downloaded clip with ffprobe and writes assets/scenes/manifest.json: the " +
-        "canvas to compose on and each clip's real duration. Both have to be measured. The same " +
+        "canvas to compose on, each clip's real duration, the frame rate the clips carry and " +
+        "whether they came back with sound. All of it has to be measured. The same " +
         "nominal 480p 16:9 came back as 864x480 from one provider and 832x480 from another, and " +
         "a 5 second ask came back as 5.167 s — so use this canvas for the composition's " +
         "data-width/data-height, its CSS box and its viewport, and these durations for the " +
-        "timing. A guessed canvas upscales the footage and multiplies render time.",
+        "timing. A guessed canvas upscales the footage and multiplies render time.\n\n" +
+        "fps goes on the root as data-fps: HyperFrames renders at 30 unless told otherwise, so " +
+        "24 fps footage left alone is delivered with a duplicate of every fifth frame. When fps " +
+        "is absent nothing reported a rate — say so rather than picking one.\n\n" +
+        "hasAudio is what the provider returned, not what the tier promises. When it is true the " +
+        "clips carry sound the user already paid for: keep it on the <video> (data-has-audio, no " +
+        "muted) instead of muting it, unless they asked for silence or it is being replaced by " +
+        "their own track.",
       shape: { dir: projectDir },
       run: async ({ dir }) => {
         const path = dirOf(dir);
