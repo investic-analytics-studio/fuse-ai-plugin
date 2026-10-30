@@ -225,18 +225,21 @@ test("tiers come from pricing, with the per-second rate the account is charged",
 
 test("a tier also states its sound, which the price list never mentions", async () => {
   const result = (await harness().tool("fuse_tiers").run({})) as {
-    tiers: Array<{ id: string; audio: { rendersAudio: boolean; model: string } }>;
+    tiers: Array<{ id: string; audio: { sound: string; model: string; because: string } }>;
   };
   for (const tier of result.tiers) {
-    assert.equal(
-      typeof tier.audio?.rendersAudio,
-      "boolean",
-      `${tier.id} reached the model saying nothing about sound`,
+    assert.ok(
+      ["always", "observed", "unknown"].includes(tier.audio?.sound),
+      `${tier.id} reached the model saying nothing usable about sound`,
     );
+    assert.ok(tier.audio.because.length > 0, `${tier.id} states its sound without a reason`);
   }
   const audioOfTier = (id: string) => result.tiers.find((tier) => tier.id === id)!.audio;
-  assert.equal(audioOfTier("t2v-low-standard").rendersAudio, false);
-  assert.equal(audioOfTier("t2v-fast-high").rendersAudio, true);
+  assert.equal(audioOfTier("t2v-fast-high").sound, "always");
+  // The tiers Fuse sends no audio input for reach the model as uncertainty, not
+  // as a promise of silence: that promise was wrong once and cost a real plan.
+  assert.equal(audioOfTier("t2v-fast-standard").sound, "observed");
+  assert.equal(audioOfTier("t2v-low-standard").sound, "unknown");
 
   // And it cannot have come from pricing however closely that is read: not one
   // priced row of a video tier is about audio. That is the whole reason this

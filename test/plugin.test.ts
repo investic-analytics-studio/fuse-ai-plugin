@@ -177,8 +177,15 @@ test("the step that plans sound asks the tool which tiers have it, and keeps no 
   // nothing re-reads a skill when a tier is rebound.
   const planning = read("skills/02-planning/SKILL.md");
   assert.ok(
-    planning.includes("rendersAudio") && planning.includes("fuse_tiers"),
-    "planning budgets voice without asking fuse_tiers whether the clips already have any",
+    planning.includes("audio.sound") && planning.includes("fuse_tiers"),
+    "planning designs sound without asking fuse_tiers what the clips will arrive carrying",
+  );
+  // And it must not sell that sound as the voice-over. A tier arriving with
+  // audio adds a track to mute; the narration is bought from ElevenLabs on
+  // every tier, and a plan that skips that budget is a plan with no voice.
+  assert.ok(
+    planning.includes("fuse_narration") && planning.includes("ElevenLabs"),
+    "planning never says where the voice itself comes from",
   );
   for (const page of SKILLS.map((skill) => `skills/${skill}/SKILL.md`)) {
     for (const model of ["Seedance", "MiniMax"]) {

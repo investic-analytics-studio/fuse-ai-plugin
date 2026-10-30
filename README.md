@@ -64,7 +64,7 @@ the audio yourself.
 
 | Tool | What it does | Costs |
 |---|---|---|
-| `fuse_tiers` | What Fuse can generate right now: your account's live pricing, plus whether each tier's clips come back with sound | nothing |
+| `fuse_tiers` | What Fuse can generate right now: your account's live pricing, plus what soundtrack each tier's clips arrive carrying, and how firmly that is known | nothing |
 | `fuse_quote` | Token cost of a set of scenes on one tier | nothing |
 | `fuse_project_new` | Scaffolds a HyperFrames project and binds it to one tier/resolution/aspect | nothing |
 | `fuse_scenes` | Generates the scenes and downloads the clips. Resumable, never double-charges | **Fuse tokens** |
@@ -94,10 +94,11 @@ a crash, a closed client or a top-up all resume where you left off, free.
   account. Call it with `dryRun: true` first: that prices the script in characters and spends
   nothing. Re-running a line you have already spoken is free, and renaming a scene is free; changing
   one word of a line is new audio and is charged again.
-- **Music and SFX are still yours to supply.** The package speaks a script; it does not write music,
-  ambience or sound effects. Some tiers do render their own audio — `fuse_tiers` says which, under
-  `audio`, so you can know before you pick one — but it can be a different voice in every scene, so
-  it is not an answer to "who narrates this".
+- **The voice is always yours to buy, on every tier.** Some tiers return clips with a soundtrack
+  of their own — `fuse_tiers` says which under `audio`, and how sure that is — but a video model
+  invents speech that reads nobody's script and can change voice between scenes. It is atmosphere
+  at best and a track to mute at worst, never the narration. Music, ambience and SFX are still
+  yours to supply as files.
 - **A quote is a floor, not a cap.** You are charged on the clip the provider returns, which can run
   slightly longer than the duration asked for.
 

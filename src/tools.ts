@@ -183,14 +183,18 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
         "the per-second rate for each, its aspect ratios, and whether it accepts a last frame. " +
         "Nothing in this package hardcodes these — call this before quoting or creating a " +
         "project.\n\n" +
-        "audio.rendersAudio says whether the model behind the tier puts sound in the clip it " +
-        "returns. It is the one field here that pricing cannot carry, because audio is free " +
-        "wherever a tier has it and pricing carries prices, so it is this package's own note on " +
-        "the model each tier runs on. Say it to the customer while the tier is still being " +
-        "chosen: on a silent tier every track — voice, music, effects — is theirs to find, which " +
-        "is a second budget on a second account. It is a claim about a model, not a measurement: " +
-        "fuse_manifest measures the clips themselves, and where the two disagree the manifest is " +
-        "right.",
+        "audio says what the clip's own soundtrack will be, which pricing cannot carry because " +
+        "audio is free wherever a tier has it and pricing carries prices. audio.sound is how " +
+        "firmly it is known: always (Fuse asks for it), observed (Fuse asks for nothing, the " +
+        "provider's default has so far returned sound) or unknown (nothing asked, nothing " +
+        "measured).\n\n" +
+        "None of that is the voice-over. A video model invents speech that reads nobody's " +
+        "script and can be a different person in every scene, so the narration always comes " +
+        "from fuse_narration or the customer's own file, on every tier. Tell them while the " +
+        "tier is being chosen: the voice is a second budget on a second account whatever they " +
+        "pick, and a tier that arrives with sound adds a track to mute rather than one to " +
+        "save. It is a claim about a model, not a measurement: fuse_manifest measures the " +
+        "clips themselves, and where the two disagree the manifest is right.",
       shape: {},
       run: async () => {
         const catalog = await deps.catalog();
@@ -414,10 +418,12 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
         "fps goes on the root as data-fps: HyperFrames renders at 30 unless told otherwise, so " +
         "24 fps footage left alone is delivered with a duplicate of every fifth frame. When fps " +
         "is absent nothing reported a rate — say so rather than picking one.\n\n" +
-        "hasAudio is what the provider returned, not what the tier promises. When it is true the " +
-        "clips carry sound the user already paid for: keep it on the <video> (data-has-audio, no " +
-        "muted) instead of muting it, unless they asked for silence or it is being replaced by " +
-        "their own track.",
+        "hasAudio is what the provider returned, not what the tier promises, and it is the " +
+        "measurement that settles any disagreement with fuse_tiers. When it is true the clip " +
+        "carries a soundtrack nobody wrote: keep it on the <video> (data-has-audio, no muted) " +
+        "only where it works as atmosphere under the piece. Where the scene has narration, or " +
+        "the model is audibly speaking, mute it — model speech reads nobody's script and " +
+        "changes voice between scenes.",
       shape: { dir: projectDir },
       run: async ({ dir }) => {
         const path = dirOf(dir);
