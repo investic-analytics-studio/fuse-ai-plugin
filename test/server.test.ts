@@ -67,6 +67,7 @@ test("the real server starts, lists its tools and answers over stdio", async () 
       listed.tools.map((tool) => tool.name),
       [
         "fuse_tiers",
+        "fuse_upload",
         "fuse_quote",
         "fuse_project_new",
         "fuse_scenes",

@@ -184,6 +184,9 @@ export async function main(): Promise<void> {
     openClip,
     scaffold: scaffoldDeps(),
     voice: voicePort(process.env.ELEVENLABS_API_KEY),
+    // Left out without a key, so fuse_upload says what to set rather than
+    // failing at the server with a 401 the model has to interpret.
+    upload: apiKey ? (file) => http.upload(file) : undefined,
     newJobId: () => randomUUID(),
   });
 

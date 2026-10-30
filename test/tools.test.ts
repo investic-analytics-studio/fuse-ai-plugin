@@ -1,7 +1,7 @@
 /**
  * The tool surface is where a model's words become our calls, so these tests
  * are about the boundary: what is refused before anything is created or
- * charged, what the seven tools are wired to, and the places where calling the
+ * charged, what the eight tools are wired to, and the places where calling the
  * same tool twice must not mean doing the work twice.
  *
  * The lifecycle's own counting is covered in lifecycle.test.ts; here a budget
@@ -88,6 +88,7 @@ interface Harness {
   argv: string[][];
   fetched: string[];
   voice?: FakeVoice;
+  uploaded: Array<{ name: string; bytes: number; mediaKind: string; groupId: string }>;
 }
 
 function harness(
@@ -97,6 +98,8 @@ function harness(
     run?: Runner;
     /** Off by default, which is the state of a customer who set no second key. */
     voice?: boolean;
+    /** On by default: a Fuse key is what every other tool here assumes. */
+    upload?: boolean | ((name: string) => Promise<string>);
   } = {},
 ): Harness {
   const runs = new FakeRuns();
@@ -138,10 +141,25 @@ function harness(
       }),
   };
   const voice = options.voice ? new FakeVoice() : undefined;
+  const uploaded: Harness["uploaded"] = [];
+  const wantUpload = options.upload ?? true;
+  const upload = wantUpload
+    ? async (file: { name: string; bytes: Uint8Array; mediaKind: string; groupId: string }) => {
+        uploaded.push({
+          name: file.name,
+          bytes: file.bytes.byteLength,
+          mediaKind: file.mediaKind,
+          groupId: file.groupId,
+        });
+        if (typeof wantUpload === "function") return wantUpload(file.name);
+        return `https://storage.googleapis.com/bucket/assets/${file.groupId}/${file.name}`;
+      }
+    : undefined;
   const list = createTools({
     catalog: async () => catalog,
     runs,
     ...(voice ? { voice } : {}),
+    ...(upload ? { upload } : {}),
     openClip: async () =>
       new ReadableStream<Uint8Array>({
         start(controller) {
@@ -162,6 +180,7 @@ function harness(
     runs,
     argv,
     fetched,
+    uploaded,
     ...(voice ? { voice } : {}),
   };
 }
@@ -188,9 +207,10 @@ const SCENES = [
 
 /* ------------------------------------------------------------------ surface */
 
-test("the surface is the seven tools the design settled on, and nothing else", () => {
+test("the surface is the eight tools the design settled on, and nothing else", () => {
   assert.deepEqual(harness().names, [
     "fuse_tiers",
+    "fuse_upload",
     "fuse_quote",
     "fuse_project_new",
     "fuse_scenes",
@@ -660,4 +680,112 @@ test("every tool's description tells the model what it costs and what comes next
     assert.match(harness().tool(name).description, /ElevenLabs/);
     assert.match(harness().tool(name).description, /not Fuse tokens|never on Fuse/);
   }
+});
+
+/* ----------------------------------------------------------------- uploading */
+
+/** Writes a file with a real extension and real bytes, so the checks are real. */
+async function imageFile(name: string, bytes = 32): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "fuse-upload-"));
+  const path = join(dir, name);
+  await writeFile(path, Buffer.alloc(bytes, 7));
+  return path;
+}
+
+test("an image on disk becomes a url the API itself can fetch", async () => {
+  const bench = harness();
+  const file = await imageFile("bottle.jpg", 64);
+  const result = (await bench.tool("fuse_upload").run({ files: [file] })) as {
+    groupId: string;
+    files: Array<{ file: string; url: string }>;
+    next: string;
+  };
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0]!.file, file);
+  assert.match(result.files[0]!.url, /^https:\/\/storage\.googleapis\.com\//);
+  // The bytes really left: the file's own length, under its own name, filed as
+  // an image. A tool that answered a url without sending anything would pass
+  // every other assertion here.
+  assert.deepEqual(bench.uploaded, [
+    { name: "bottle.jpg", bytes: 64, mediaKind: "image", groupId: "job-under-test" },
+  ]);
+});
+
+test("files uploaded together share one folder, and a job can name it", async () => {
+  const bench = harness();
+  const a = await imageFile("front.png");
+  const b = await imageFile("back.webp");
+  const result = (await bench.tool("fuse_upload").run({
+    files: [a, b],
+    groupId: "ad-7f3a21",
+  })) as { groupId: string };
+  assert.equal(result.groupId, "ad-7f3a21");
+  assert.deepEqual(new Set(bench.uploaded.map((u) => u.groupId)), new Set(["ad-7f3a21"]));
+});
+
+test("a path that is not an image is refused before anything is sent", async () => {
+  const bench = harness();
+  const notImage = await imageFile("script.txt");
+  await assert.rejects(
+    () => bench.tool("fuse_upload").run({ files: [notImage] }),
+    /\.txt|images/,
+  );
+  assert.deepEqual(bench.uploaded, [], "it sent a file it had already decided to refuse");
+});
+
+test("a path that is not there is refused before anything is sent", async () => {
+  const bench = harness();
+  await assert.rejects(
+    () => bench.tool("fuse_upload").run({ files: ["./no-such-product.png"] }),
+    /not a file/,
+  );
+  assert.deepEqual(bench.uploaded, []);
+});
+
+test("an empty file is refused, because the API would take it and i2v would not", async () => {
+  const bench = harness();
+  const empty = await imageFile("empty.png", 0);
+  await assert.rejects(() => bench.tool("fuse_upload").run({ files: [empty] }), /empty/);
+  assert.deepEqual(bench.uploaded, []);
+});
+
+/**
+ * The failure that matters: three files, the second one fails. The first is
+ * already on Fuse, so the message has to name it — otherwise the model retries
+ * the whole list and the customer's asset library fills with duplicates.
+ */
+test("a failure part way names what is already uploaded", async () => {
+  const bench = harness({
+    upload: async (name: string) => {
+      if (name === "second.png") throw new Error("storage refused it");
+      return `https://storage.googleapis.com/bucket/${name}`;
+    },
+  });
+  const first = await imageFile("first.png");
+  const second = await imageFile("second.png");
+  const third = await imageFile("third.png");
+  await assert.rejects(
+    () => bench.tool("fuse_upload").run({ files: [first, second, third] }),
+    (error: Error) => {
+      assert.match(error.message, /storage refused it/, "it hid the server's own words");
+      assert.match(error.message, /Already uploaded/);
+      assert.ok(error.message.includes(first), "it did not name the file already on Fuse");
+      return true;
+    },
+  );
+  // And the third was never sent: stopping at the first failure is what keeps
+  // the list in the message complete.
+  assert.deepEqual(
+    bench.uploaded.map((u) => u.name),
+    ["first.png", "second.png"],
+  );
+});
+
+test("without a Fuse key the tool says what to set, rather than failing at the server", async () => {
+  const bench = harness({ upload: false });
+  const file = await imageFile("bottle.jpg");
+  await assert.rejects(
+    () => bench.tool("fuse_upload").run({ files: [file] }),
+    /FUSE_API_KEY/,
+  );
 });

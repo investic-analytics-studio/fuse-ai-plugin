@@ -62,6 +62,7 @@ the audio yourself.
 | Tool | What it does | Costs |
 |---|---|---|
 | `fuse_tiers` | What Fuse can generate right now: your account's live pricing, plus what soundtrack each tier's clips arrive carrying, and how firmly that is known | nothing |
+| `fuse_upload` | Puts local images on your Fuse account and returns a public URL for each, which is what makes image-to-video usable | nothing |
 | `fuse_quote` | Token cost of a set of scenes on one tier | nothing |
 | `fuse_project_new` | Scaffolds a HyperFrames project and binds it to one tier/resolution/aspect | nothing |
 | `fuse_scenes` | Generates the scenes and downloads the clips. Resumable, never double-charges | **Fuse tokens** |
@@ -85,8 +86,10 @@ a crash, a closed client or a top-up all resume where you left off, free.
 - **An API key cannot read your token balance.** There is no balance tool because the endpoint is
   session-authenticated. You learn you are short when a generation is refused — so agree a budget
   from `fuse_quote` first.
-- **Image-to-video needs image URLs the API can fetch itself.** A file on your disk cannot be sent:
-  uploads are session-authenticated too. Text-to-video tiers are unaffected.
+- **An uploaded image gets a public URL.** Image-to-video reads its start frame over HTTP, so
+  `fuse_upload` puts your file on your Fuse account and hands back a plain storage link — no key in
+  it, readable by anyone who has it. It lands in your own asset library. Do not upload anything you
+  would not put on a public URL.
 - **Voice-over is billed by ElevenLabs, not by us.** `fuse_narration` runs on your own ElevenLabs
   account. Call it with `dryRun: true` first: that prices the script in characters and spends
   nothing. Re-running a line you have already spoken is free, and renaming a scene is free; changing

@@ -19,6 +19,7 @@ import { type JobSpec, type SceneSpec, modeOf } from "../domain.ts";
 
 const PRICING_PATH = "/v1/api/pricing";
 const VIDEO_PATH = "/v1/api/ai/standalone/video";
+const UPLOAD_PATH = "/v1/api/upload";
 
 /**
  * Why a call did not succeed, in the terms the caller can act on:
@@ -86,6 +87,20 @@ export interface Transport {
   post(path: string, body: unknown): Promise<unknown>;
 }
 
+/** One file, already read, on its way to somewhere the API can fetch it. */
+export interface FileToUpload {
+  /** The name the customer will recognise it by, not a path. */
+  readonly name: string;
+  readonly bytes: Uint8Array;
+  /** The server's own word for the kind of asset, e.g. "image". */
+  readonly mediaKind: string;
+  /** Groups a job's files into one folder; any stable string will do. */
+  readonly groupId: string;
+}
+
+/** Posts one file and answers with the URL the API itself can read it from. */
+export type UploadPort = (file: FileToUpload) => Promise<string>;
+
 export interface FuseHttpOptions {
   readonly baseUrl: string;
   /** Left out for `/pricing`, which is public. */
@@ -112,18 +127,45 @@ export class FuseHttp implements Transport {
     return this.send("POST", path, body);
   }
 
+  /**
+   * Puts one file where `image_urls` can reach it, and answers with that URL.
+   *
+   * It goes through its own method rather than `post` because the body is
+   * multipart: the server wants the bytes under `file` and everything else as
+   * one JSON string under `metadata`, which is the shape the web app sends.
+   * `fetch` writes the boundary itself, so Content-Type is left unset here —
+   * setting it by hand is the usual way this breaks.
+   */
+  async upload(file: FileToUpload): Promise<string> {
+    const form = new FormData();
+    form.append("file", new Blob([file.bytes]), file.name);
+    form.append(
+      "metadata",
+      JSON.stringify({ dir_name: "assets", group_uuid: file.groupId, media_kind: file.mediaKind }),
+    );
+    const data = await this.send("POST", UPLOAD_PATH, form);
+    const url = (data as { downloadUrl?: unknown } | null)?.downloadUrl;
+    if (typeof url !== "string" || !url) {
+      throw new FuseError("server", 200, UPLOAD_PATH + " answered without a downloadUrl");
+    }
+    return url;
+  }
+
   private async send(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
     const url = new URL(path, this.baseUrl);
+    const multipart = body instanceof FormData;
     const headers: Record<string, string> = { Accept: "application/json" };
     if (this.apiKey) headers.Authorization = "Bearer " + this.apiKey;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    // FormData carries its own Content-Type, boundary included, and fetch sets
+    // it. Writing one here would send a boundary the body does not use.
+    if (body !== undefined && !multipart) headers["Content-Type"] = "application/json";
 
     let response: Response;
     try {
       response = await fetch(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : multipart ? (body as FormData) : JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (cause) {

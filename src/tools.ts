@@ -20,11 +20,12 @@
  * shape and a function — `index.ts` is what turns that into a server, and a
  * test can call `run()` directly.
  */
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import { audioOf } from "./fuse/audio.ts";
 import { Catalog } from "./fuse/catalog.ts";
-import type { OpenClip } from "./fuse/client.ts";
+import type { OpenClip, UploadPort } from "./fuse/client.ts";
 import { JobStore, Lifecycle, type RunsPort } from "./job/lifecycle.ts";
 import {
   createProject,
@@ -53,6 +54,11 @@ export interface ToolDeps {
    * voice tools are the only ones that say so, and they say what to set.
    */
   readonly voice?: VoicePort;
+  /**
+   * Puts a local file where the API can fetch it. Absent without a Fuse key,
+   * the same way the video tools are: uploading is an authenticated call.
+   */
+  readonly upload?: UploadPort;
   /** Injected so a test knows the id it will get back. */
   newJobId(): string;
 }
@@ -133,6 +139,26 @@ function dirOf(value: string): string {
   return isAbsolute(value) ? resolve(value) : resolve(process.cwd(), value);
 }
 
+function uploadOf(deps: ToolDeps): UploadPort {
+  if (!deps.upload) {
+    throw new Error(
+      "No Fuse API key, so there is nowhere to upload to. Set FUSE_API_KEY and restart the " +
+        "client. Listing tiers and pricing a job work without it; putting a file on Fuse does not.",
+    );
+  }
+  return deps.upload;
+}
+
+/**
+ * What the server should file the asset as. Only images matter here — an
+ * image-to-video tier is the reason this tool exists — so anything else is
+ * refused by name rather than guessed at and filed wrongly.
+ */
+const IMAGE_SUFFIXES = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+
+/** Big enough for any product photo, small enough that a wrong path is caught. */
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 function specOf(catalog: Catalog, tier: string, resolution: string, aspect: string): JobSpec {
   const id = tierIdOf(tier);
   return {
@@ -201,6 +227,87 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
         return {
           tiers: catalog.tiers.map((tier) => ({ ...tier, audio: audioOf(tier.id) })),
           asOf: catalog.asOf.toISOString(),
+        };
+      },
+    }),
+
+    tool({
+      name: "fuse_upload",
+      title: "Put a local image where image-to-video can reach it",
+      description:
+        "Uploads image files from this machine to the customer's own Fuse account and returns " +
+        "a public URL for each. Costs no tokens.\n\n" +
+        "This is what makes image-to-video usable. An i2v tier reads its start frame over " +
+        "HTTP — the API fetches the URL itself — so a photo sitting on the customer's disk " +
+        "cannot be sent to it. Upload it here first, then pass the url straight into " +
+        "fuse_scenes as imageUrls (or lastImageUrl).\n\n" +
+        "The files land in the account's own asset library, where the customer can see them " +
+        "on the web, and the URL is a plain public storage link with no key in it — so do not " +
+        "upload anything they would not put on a public URL. Ask before uploading a file they " +
+        "did not point at.",
+      shape: {
+        files: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(9)
+          .describe(
+            "Paths to image files on this machine, absolute or relative to the working " +
+              "directory. How many an i2v tier accepts is the tier's own rule, not this limit.",
+          ),
+        groupId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Files uploaded together land in one folder under this name. Pass the project's " +
+              "job id to keep an ad's images together; a new one is made when it is left out.",
+          ),
+      },
+      run: async ({ files, groupId }) => {
+        const upload = uploadOf(deps);
+        const group = groupId ?? deps.newJobId();
+        const uploaded: Array<{ file: string; url: string }> = [];
+        for (const entry of files) {
+          const path = dirOf(entry);
+          const suffix = extname(path).toLowerCase();
+          if (!IMAGE_SUFFIXES.has(suffix)) {
+            throw new Error(
+              `${entry} is ${suffix || "extensionless"}; this uploads images ` +
+                `(${[...IMAGE_SUFFIXES].join(", ")}). A video scene comes from fuse_scenes, ` +
+                "not from a file.",
+            );
+          }
+          const info = await stat(path).catch(() => undefined);
+          if (!info?.isFile()) throw new Error(`${entry} is not a file on this machine`);
+          if (info.size === 0) throw new Error(`${entry} is empty`);
+          if (info.size > MAX_UPLOAD_BYTES) {
+            throw new Error(
+              `${entry} is ${Math.round(info.size / 1024 / 1024)} MB; the limit here is ` +
+                `${MAX_UPLOAD_BYTES / 1024 / 1024} MB. Resize it rather than raising this.`,
+            );
+          }
+          // One at a time, and the list is returned even when a later file
+          // fails: an upload that already happened should not be repeated.
+          const url = await upload({
+            name: basename(path),
+            bytes: await readFile(path),
+            mediaKind: "image",
+            groupId: group,
+          }).catch((error: unknown) => {
+            const done = uploaded.map((u) => u.file).join(", ");
+            throw new Error(
+              `${entry} did not upload: ${(error as Error).message}` +
+                (done ? `. Already uploaded, do not send again: ${done}` : ""),
+            );
+          });
+          uploaded.push({ file: entry, url });
+        }
+        return {
+          groupId: group,
+          files: uploaded,
+          next:
+            "Pass these urls to fuse_scenes as imageUrls on an i2v tier. They are public " +
+            "links: the API reads them, and so can anyone who has them.",
         };
       },
     }),
