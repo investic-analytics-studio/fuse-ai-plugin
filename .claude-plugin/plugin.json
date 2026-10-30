@@ -1,6 +1,6 @@
 {
   "name": "fuse",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Make a product ad end to end: analyse the assets, plan and storyboard it, generate the scenes with Fuse's API, then edit and render locally with HyperFrames. Generating runs on Fuse and spends tokens; editing and rendering run on this machine.",
   "author": {
     "name": "Fuse AI"

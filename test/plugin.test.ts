@@ -79,7 +79,7 @@ test("the package says it is Apache-2.0 and ships the text that says so", () => 
   assert.match(license, /Apache License\s+Version 2\.0, January 2004/);
   assert.match(license, /Copyright \d{4} Fuse AI/, "the appendix still has its placeholder");
   // `private` would make `npm publish` refuse, and a scoped package without
-  // this defaults to restricted: either way the customer's `npx -y @fuse-ai/mcp`
+  // this defaults to restricted: either way the customer's `npx -y @fuseai/mcp`
   // cannot resolve, which is the install path every document here describes.
   assert.equal(manifest.private, undefined, "a private package never reaches a customer");
   assert.deepEqual(manifest.publishConfig, { access: "public" });

@@ -132,7 +132,7 @@ test("each client is configured through its own CLI, with our launch command", a
     "--",
     "npx",
     "-y",
-    "@fuse-ai/mcp",
+    "@fuseai/mcp",
   ]);
   assert.deepEqual(argsFor(bench, "codex"), [
     "mcp",
@@ -143,7 +143,7 @@ test("each client is configured through its own CLI, with our launch command", a
     "--",
     "npx",
     "-y",
-    "@fuse-ai/mcp",
+    "@fuseai/mcp",
   ]);
   assert.equal(state(report, "Claude Code"), "installed");
   assert.equal(state(report, "Codex CLI"), "installed");
@@ -377,9 +377,9 @@ test("a machine with no client CLI at all is told what to install", async () => 
 
 test("the package names itself from package.json, in one place", () => {
   const self = selfPackage();
-  assert.equal(self.name, "@fuse-ai/mcp");
+  assert.equal(self.name, "@fuseai/mcp");
   assert.match(self.version, /^\d+\.\d+\.\d+/);
-  assert.deepEqual(launchCommand(), ["npx", "-y", "@fuse-ai/mcp"]);
+  assert.deepEqual(launchCommand(), ["npx", "-y", "@fuseai/mcp"]);
   // The version to launch is a parameter, because pinning it is still open.
-  assert.deepEqual(launchCommand("@fuse-ai/mcp@1.2.3"), ["npx", "-y", "@fuse-ai/mcp@1.2.3"]);
+  assert.deepEqual(launchCommand("@fuseai/mcp@1.2.3"), ["npx", "-y", "@fuseai/mcp@1.2.3"]);
 });

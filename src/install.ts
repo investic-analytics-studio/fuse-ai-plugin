@@ -1,5 +1,5 @@
 /**
- * `npx -y @fuse-ai/mcp install` — put this server into whichever clients this
+ * `npx -y @fuseai/mcp install` — put this server into whichever clients this
  * machine has, and check the machine can render.
  *
  * It does not write any client's config file. Every client here has a CLI that
@@ -38,7 +38,7 @@ export function selfPackage(): SelfPackage {
 
 /**
  * Left unpinned on purpose for now: the docs tell customers to run
- * `npx -y @fuse-ai/mcp`, and pinning here while the docs float would give two
+ * `npx -y @fuseai/mcp`, and pinning here while the docs float would give two
  * answers. Whether to pin the version, or install it globally instead of
  * fetching it per session, is still an open question on the card — so it is a
  * parameter, not a constant buried in a command line.

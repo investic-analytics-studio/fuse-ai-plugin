@@ -230,7 +230,7 @@ test("started through a link, as npm installs it, the program still runs", async
 
 test("the installer can be told what the client should launch", () => {
   assert.equal(packageSpec(["--dry-run"]), undefined, "the default is this package's own name");
-  assert.equal(packageSpec(["--package", "@fuse-ai/mcp@1.2.3"]), "@fuse-ai/mcp@1.2.3");
+  assert.equal(packageSpec(["--package", "@fuseai/mcp@1.2.3"]), "@fuseai/mcp@1.2.3");
   assert.equal(packageSpec(["--package", "/home/me/fuse-ai-plugin", "--dry-run"]), "/home/me/fuse-ai-plugin");
   // A swallowed flag would silently register the wrong command.
   assert.throws(() => packageSpec(["--package"]), /needs a value/);

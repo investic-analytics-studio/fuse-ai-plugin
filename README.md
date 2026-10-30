@@ -1,4 +1,4 @@
-# @fuse-ai/mcp
+# @fuseai/mcp
 
 Fuse AI for coding agents. Your agent generates the video scenes through Fuse's API, then edits
 and renders them on your own machine with [HyperFrames](https://www.npmjs.com/package/hyperframes).
@@ -8,9 +8,6 @@ runs locally and costs nothing.
 
 It ships as both an MCP server (any client) and a Claude Code plugin (the server plus the four-step
 ad playbook and a `/make-ad` command).
-
-> Not on npm yet. The `npx -y @fuse-ai/mcp` commands below are the intended install and are what the
-> installer writes; until the package is published, point them at a local checkout instead.
 
 ## Requirements
 
@@ -28,7 +25,7 @@ ad playbook and a `/make-ad` command).
 ```bash
 export FUSE_API_KEY=...        # omit to install without a key; quoting still works
 export ELEVENLABS_API_KEY=...  # optional, and your own account: voice-over only
-npx -y @fuse-ai/mcp install    # add --dry-run to see the commands without running them
+npx -y @fuseai/mcp install    # add --dry-run to see the commands without running them
 ```
 
 It does not edit anyone's config file. It runs each client's own CLI — `claude mcp add`,
@@ -45,8 +42,8 @@ it safely. It reports a client it cannot find, and prints by-hand steps for a cl
 **One client at a time, by hand:**
 
 ```bash
-claude mcp add fuse -s user -e FUSE_API_KEY=... -e ELEVENLABS_API_KEY=... -- npx -y @fuse-ai/mcp
-codex  mcp add fuse --env FUSE_API_KEY=... --env ELEVENLABS_API_KEY=... -- npx -y @fuse-ai/mcp
+claude mcp add fuse -s user -e FUSE_API_KEY=... -e ELEVENLABS_API_KEY=... -- npx -y @fuseai/mcp
+codex  mcp add fuse --env FUSE_API_KEY=... --env ELEVENLABS_API_KEY=... -- npx -y @fuseai/mcp
 ```
 
 Both keys are read from the environment only, never from a command-line argument the installer
