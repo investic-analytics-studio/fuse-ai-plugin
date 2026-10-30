@@ -7,15 +7,17 @@
     "node": ">=22.18.0"
   },
   "bin": {
-    "fuse-mcp": "./src/index.ts"
+    "fuse-mcp": "./dist/index.js"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "test": "node --experimental-strip-types --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "test:live": "node --experimental-strip-types --test test/catalog.test.ts"
   },
   "files": [
-    "src",
+    "dist",
     "skills",
     "README.md"
   ],

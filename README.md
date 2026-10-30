@@ -108,12 +108,19 @@ a crash, a closed client or a top-up all resume where you left off, free.
 npm install
 npm test              # the whole suite, offline
 npm run typecheck     # tsc --noEmit; the suite runs this too
+npm run build         # tsc -p tsconfig.build.json, into dist/; prepack runs it
 npm run test:live     # one real call to the public pricing endpoint
 node src/index.ts install --dry-run
 ```
 
-No build step, by design: `bin` points at `src/index.ts` and Node strips the types. The type check is
-therefore the only thing that reads them, which is why the suite runs it rather than leaving it to CI.
+Development runs the sources: Node reads `.ts` directly, so `node src/index.ts` needs no build and the
+imports keep their real `.ts` extensions.
+
+Publishing cannot. Node refuses to strip types for anything under `node_modules`
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), which is exactly where this package lives once it is
+installed — so `bin` points at `dist/index.js`, built by `tsc` with `rewriteRelativeImportExtensions`,
+which turns each `./x.ts` into `./x.js` on the way out. One source tree, both ways of running it.
+`prepack` builds, so `npm publish` and `npm pack` cannot ship a stale or missing `dist/`.
 
 ## Licence
 

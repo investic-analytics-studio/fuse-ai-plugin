@@ -1,0 +1,24 @@
+{
+  // The published build. tsconfig.json only checks; this one emits.
+  //
+  // It exists because Node refuses to strip types for anything under
+  // node_modules (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), which is
+  // exactly where this package lives on a customer's machine. Running
+  // `node src/index.ts` from a checkout works and always did; `npx` could
+  // never have worked, because the entry point would be a .ts file inside
+  // node_modules.
+  //
+  // `rewriteRelativeImportExtensions` is what makes one source tree serve
+  // both: the imports keep their real `.ts` extension, so Node can run the
+  // sources directly during development, and tsc rewrites them to `.js` on
+  // the way out.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "dist",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -6,3 +6,6 @@ node_modules/
 # Never let a key near a commit; the server takes it from the environment only.
 .env
 .env.*
+
+# The published build, made by `npm run build` (prepack runs it).
+dist/
