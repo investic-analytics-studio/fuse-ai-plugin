@@ -223,6 +223,38 @@ test("tiers come from pricing, with the per-second rate the account is charged",
   assert.ok(Date.parse(result.asOf) > 0);
 });
 
+test("a tier also states its sound, which the price list never mentions", async () => {
+  const result = (await harness().tool("fuse_tiers").run({})) as {
+    tiers: Array<{ id: string; audio: { rendersAudio: boolean; model: string } }>;
+  };
+  for (const tier of result.tiers) {
+    assert.equal(
+      typeof tier.audio?.rendersAudio,
+      "boolean",
+      `${tier.id} reached the model saying nothing about sound`,
+    );
+  }
+  const audioOfTier = (id: string) => result.tiers.find((tier) => tier.id === id)!.audio;
+  assert.equal(audioOfTier("t2v-low-standard").rendersAudio, false);
+  assert.equal(audioOfTier("t2v-fast-high").rendersAudio, true);
+
+  // And it cannot have come from pricing however closely that is read: not one
+  // priced row of a video tier is about audio. That is the whole reason this
+  // package states it (src/fuse/audio.ts) instead of parsing it.
+  const priced = (
+    fixture.data.services as Array<{ service_name: string; options?: Array<{ category: string }> }>
+  ).filter((service) => result.tiers.some((tier) => tier.id === service.service_name));
+  assert.equal(priced.length, result.tiers.length, "the fixture lost a tier");
+  for (const service of priced) {
+    for (const option of service.options ?? []) {
+      assert.ok(
+        !option.category.includes("audio"),
+        `${service.service_name} prices ${option.category}, so the sound could be read instead`,
+      );
+    }
+  }
+});
+
 test("a quote needs no aspect and no prompts, because the price depends on neither", async () => {
   const result = (await harness().tool("fuse_quote").run({
     tier: "t2v-low-standard",

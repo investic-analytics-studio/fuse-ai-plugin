@@ -64,11 +64,11 @@ the audio yourself.
 
 | Tool | What it does | Costs |
 |---|---|---|
-| `fuse_tiers` | What Fuse can generate right now, read live from your account's pricing | nothing |
+| `fuse_tiers` | What Fuse can generate right now: your account's live pricing, plus whether each tier's clips come back with sound | nothing |
 | `fuse_quote` | Token cost of a set of scenes on one tier | nothing |
 | `fuse_project_new` | Scaffolds a HyperFrames project and binds it to one tier/resolution/aspect | nothing |
 | `fuse_scenes` | Generates the scenes and downloads the clips. Resumable, never double-charges | **Fuse tokens** |
-| `fuse_manifest` | Measures the clips with ffprobe and writes the canvas and real durations | nothing |
+| `fuse_manifest` | Measures the clips with ffprobe: the canvas, the real durations, the frame rate and whether they carry sound | nothing |
 | `fuse_voices` | The voices and models on *your* ElevenLabs account, and the characters left | nothing |
 | `fuse_narration` | Speaks the script into `assets/audio/`. Resumable, never double-charges | **your ElevenLabs characters** |
 
@@ -77,7 +77,7 @@ pricing — or your own ElevenLabs account — on every call, so a change on our
 a package update.
 
 `fuse_scenes` is the only tool that spends Fuse tokens. Its `maxTokens` is a ceiling on the whole
-project, already-spent included, and it refuses rather than overshoot. It blocks for 90 seconds and
+project, already-spent included, and it refuses rather than overshoot. It blocks for 45 seconds and
 then reports progress; calling it again with the same arguments waits on instead of starting over, so
 a crash, a closed client or a top-up all resume where you left off, free.
 
@@ -95,8 +95,9 @@ a crash, a closed client or a top-up all resume where you left off, free.
   nothing. Re-running a line you have already spoken is free, and renaming a scene is free; changing
   one word of a line is new audio and is charged again.
 - **Music and SFX are still yours to supply.** The package speaks a script; it does not write music,
-  ambience or sound effects. Some tiers do render their own audio, which can be a different voice in
-  every scene — so that is not an answer to "who narrates this".
+  ambience or sound effects. Some tiers do render their own audio — `fuse_tiers` says which, under
+  `audio`, so you can know before you pick one — but it can be a different voice in every scene, so
+  it is not an answer to "who narrates this".
 - **A quote is a floor, not a cap.** You are charged on the clip the provider returns, which can run
   slightly longer than the duration asked for.
 

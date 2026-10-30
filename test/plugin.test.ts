@@ -170,6 +170,26 @@ test("nothing may talk about spending without naming the quote that gates it", (
   }
 });
 
+test("the step that plans sound asks the tool which tiers have it, and keeps no list of its own", () => {
+  // A tier's sound is a claim about the model behind it, and the one copy of
+  // that claim is src/fuse/audio.ts, where fuse_tiers reads it. A skill that
+  // names the models instead would be a second copy, and the stale one, since
+  // nothing re-reads a skill when a tier is rebound.
+  const planning = read("skills/02-planning/SKILL.md");
+  assert.ok(
+    planning.includes("rendersAudio") && planning.includes("fuse_tiers"),
+    "planning budgets voice without asking fuse_tiers whether the clips already have any",
+  );
+  for (const page of SKILLS.map((skill) => `skills/${skill}/SKILL.md`)) {
+    for (const model of ["Seedance", "MiniMax"]) {
+      assert.ok(
+        !read(page).includes(model),
+        `${page} names ${model}, which makes it a second copy of the model table`,
+      );
+    }
+  }
+});
+
 test("the two steps that run on the customer's own machine call nothing of ours", () => {
   // Analysis is reading; editing is HyperFrames' job through the shell. If a
   // Fuse tool call leaks into either, the step has quietly changed owner.

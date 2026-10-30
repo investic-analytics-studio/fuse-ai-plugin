@@ -22,6 +22,7 @@
  */
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import { audioOf } from "./fuse/audio.ts";
 import { Catalog } from "./fuse/catalog.ts";
 import type { OpenClip } from "./fuse/client.ts";
 import { JobStore, Lifecycle, type RunsPort } from "./job/lifecycle.ts";
@@ -180,11 +181,23 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
         "What Fuse can generate right now, read live from the account's pricing: each tier's " +
         "three axes (mode, priority, quality), its token price, the resolutions it offers with " +
         "the per-second rate for each, its aspect ratios, and whether it accepts a last frame. " +
-        "Nothing in this package hardcodes these — call this before quoting or creating a project.",
+        "Nothing in this package hardcodes these — call this before quoting or creating a " +
+        "project.\n\n" +
+        "audio.rendersAudio says whether the model behind the tier puts sound in the clip it " +
+        "returns. It is the one field here that pricing cannot carry, because audio is free " +
+        "wherever a tier has it and pricing carries prices, so it is this package's own note on " +
+        "the model each tier runs on. Say it to the customer while the tier is still being " +
+        "chosen: on a silent tier every track — voice, music, effects — is theirs to find, which " +
+        "is a second budget on a second account. It is a claim about a model, not a measurement: " +
+        "fuse_manifest measures the clips themselves, and where the two disagree the manifest is " +
+        "right.",
       shape: {},
       run: async () => {
         const catalog = await deps.catalog();
-        return { tiers: catalog.tiers, asOf: catalog.asOf.toISOString() };
+        return {
+          tiers: catalog.tiers.map((tier) => ({ ...tier, audio: audioOf(tier.id) })),
+          asOf: catalog.asOf.toISOString(),
+        };
       },
     }),
 
