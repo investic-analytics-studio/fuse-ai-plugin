@@ -1,5 +1,7 @@
 # @fuseai/mcp
 
+***English** · [ภาษาไทย](README.th.md)*
+
 Fuse AI for coding agents. Your agent generates the video scenes through Fuse's API, then edits
 and renders them on your own machine with [HyperFrames](https://www.npmjs.com/package/hyperframes).
 
