@@ -19,7 +19,8 @@
   "files": [
     "dist",
     "skills",
-    "README.md"
+    "README.md",
+    "README.th.md"
   ],
   "license": "Apache-2.0",
   "author": "Fuse AI",
