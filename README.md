@@ -117,12 +117,34 @@ nothing below will.
 
 ### 4. Price the job and agree a ceiling
 
-> three scenes, four seconds each, on i2v-fast-standard at 720p — what does that cost?
+> three scenes, four seconds each, on i2v-fast-standard at 480p — what does that cost?
 
 The agent calls **`fuse_quote`** with `tier`, `resolution` and `scenes`, each scene a `slug` and
-`seconds`; prompts are not needed to price. **The total is a floor, not a cap** — you are charged on
-the clip the provider returns, which can run slightly longer than the duration asked for. Decide the
-number you are willing to spend here; it becomes `maxTokens` in step 6.
+`seconds`; prompts are not needed to price:
+
+```json
+{
+  "tier": "i2v-fast-standard",
+  "resolution": "480p",
+  "lines": [
+    { "slug": "pour",  "tokens": 114 },
+    { "slug": "glass", "tokens": 114 },
+    { "slug": "logo",  "tokens": 114 }
+  ],
+  "total": 342
+}
+```
+
+That is `baseTokens` 10 plus 26 a second for 480p, four seconds each. Pass a resolution the tier does
+not offer and it refuses — this tier has 480p and 768p, not 720p, which is why step 3 comes first.
+
+**The total is a floor, not a cap**: you are charged on the clip the provider returns, which can run
+slightly longer than asked, so set the ceiling a little above the quote. That ceiling becomes
+`maxTokens` in step 6.
+
+To prove the path works for as little as possible, run it once on `t2v-low-standard` at 480p: the
+same three four-second scenes come to **108 tokens**, a third of the price. It gives up the last
+frame and its `audio.sound` is `unknown`, but nothing else about the sequence changes.
 
 ### 5. Create the project
 
