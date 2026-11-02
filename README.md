@@ -11,8 +11,9 @@ ad playbook and a `/make-ad` command).
 
 ## Requirements
 
-- **Node 22.18.0 or newer.** That is the release where Node runs TypeScript directly, which is why
-  this package has no build step. `node --version` to check.
+- **Node 22.18.0 or newer.** `node --version` to check. The published package runs compiled
+  JavaScript, but the sources are TypeScript that Node runs directly in development — see
+  [Development](#development).
 - A Fuse API key, from the Fuse dashboard. Without one you can still list tiers and price a job;
   generating needs it.
 - ffmpeg and a headless Chrome for rendering. You do not install these by hand — the installer runs
@@ -56,6 +57,149 @@ ElevenLabs account**, and it pays for the voice-over in ElevenLabs characters �
 a separate company, topped up in a separate place. Leave it out and everything works except the
 voice: the two voice tools refuse with instructions, and the ads come out silent unless you supply
 the audio yourself.
+
+## A full run, end to end
+
+One sequence, from a machine that has never seen this package to a rendered file. **You talk to the
+agent; the agent calls the tools.** The shell commands below are only the ones you run yourself:
+installing, checking the machine, and rendering.
+
+### 1. Check the machine
+
+```bash
+node --version    # 22.18.0 or newer
+```
+
+### 2. Install, dry run first
+
+On a machine you have not set up before, look before you touch anything:
+
+```bash
+npx -y @fuseai/mcp install --dry-run
+```
+
+```
+@fuseai/mcp 0.1.0
+
+  Claude Code: would install
+    claude mcp add fuse -s user -- npx -y @fuseai/mcp
+  Codex CLI: would install
+    codex mcp add fuse -- npx -y @fuseai/mcp
+
+  rendering: ready
+```
+
+It names every client it found and the exact command it would run for each, so nothing happens that
+you did not read first. `rendering: ready` is HyperFrames' own `doctor`: ffmpeg and a headless
+Chrome are present. A machine that reports otherwise still generates clips fine — it just cannot do
+step 9.
+
+Then the real thing, with the keys in the environment so they never appear in a command line:
+
+```bash
+export FUSE_API_KEY=...        # omit and quoting still works; generating does not
+export ELEVENLABS_API_KEY=...  # optional, your own account, voice-over only
+npx -y @fuseai/mcp install
+```
+
+Start a new client session afterwards, so it picks the server up.
+
+### 3. Prove the server is reachable before spending anything
+
+> list the Fuse tiers
+
+The agent calls **`fuse_tiers`**. No key, no cost — which makes it the cheapest possible proof that
+the server is actually wired into this client. You get the live tier list with prices, and an
+`audio` field per tier saying what soundtrack its clips arrive carrying. If this does not work,
+nothing below will.
+
+### 4. Price the job and agree a ceiling
+
+> three scenes, four seconds each, on i2v-fast-standard at 720p — what does that cost?
+
+The agent calls **`fuse_quote`** with `tier`, `resolution` and `scenes`, each scene a `slug` and
+`seconds`; prompts are not needed to price. **The total is a floor, not a cap** — you are charged on
+the clip the provider returns, which can run slightly longer than the duration asked for. Decide the
+number you are willing to spend here; it becomes `maxTokens` in step 6.
+
+### 5. Create the project
+
+> create the project in ./my-ad on that tier and resolution
+
+The agent calls **`fuse_project_new`** with `dir`, `tier`, `resolution` and optionally `aspect`. It
+runs `hyperframes init` — which brings its own project file, its own instructions and its own
+skills — and then adds only the parts Fuse knows about:
+
+```
+my-ad/
+  hyperframes.json        # HyperFrames' own, plus the files its init writes
+  assets/
+    scenes/               # the clips land here
+    fonts/
+      noto-sans-thai.css  # local Thai font, so Thai does not render as empty boxes
+  .fuse/
+    job.json              # the record of what has been paid for
+```
+
+Point it at a directory that already has a `hyperframes.json` and it **reuses** that project and
+reports what has already been spent, instead of starting a second one beside it.
+
+### 6. Generate the clips — the only step that spends Fuse tokens
+
+> generate the scenes, ceiling 900 tokens
+
+The agent calls **`fuse_scenes`** with `dir`, `maxTokens` and `scenes`, each scene a `prompt` plus
+`imageUrls` for image-to-video and `lastImageUrl` where the tier supports one. A local image has to
+go through **`fuse_upload`** first, which puts it on your Fuse account and hands back a public URL.
+
+`maxTokens` is a ceiling on the **whole project**, already-spent included, and the tool refuses
+rather than overshoot it. The call blocks for about 45 seconds and then reports progress; **call it
+again with the same arguments** and it waits on runs already paid for instead of starting new ones,
+so a crash, a closed client or a top-up all resume for free. That is what `.fuse/job.json` is for:
+delete it and you have thrown away the record of what you bought.
+
+### 7. Measure the clips before composing anything
+
+> measure the clips
+
+The agent calls **`fuse_manifest`**, which runs ffprobe over the downloaded clips and writes
+`assets/scenes/manifest.json`: the real canvas, the real durations, the frame rate, and whether each
+clip carries sound. **Compose from this file, never from the resolution name** — the delivered pixel
+size does not always match what the name implies.
+
+### 8. Voice-over, if you want it — billed by ElevenLabs, not by Fuse
+
+> what voices do I have? price the script before speaking any of it
+
+**`fuse_voices`** lists the voices and models on your own ElevenLabs account and the characters you
+have left. **`fuse_narration`** speaks the script into `assets/audio/` — call it with `dryRun: true`
+first, which prices the script in characters and spends nothing. Re-speaking a line you already have
+is free; changing one word of it is new audio and is charged again.
+
+### 9. Edit and render — on your machine, for nothing
+
+Writing the composition is HyperFrames' subject, not this package's: read the instructions and
+skills that `hyperframes init` left inside the project. Then, from the project directory:
+
+```bash
+npx hyperframes lint      # problems before a render, Thai rendering as boxes among them
+npx hyperframes check     # checks the composition
+npx hyperframes render    # the real render
+```
+
+If `check` warns `film_silent` **and** the manifest says the clips carry no sound, that warning is
+the expected one: what you have is a picture cut with no audio mix, and saying otherwise would be a
+lie. If the manifest says the clips **do** carry sound and you still get `film_silent`, you have
+muted audio you paid for.
+
+### Taking it to a second machine
+
+- Keys live in each client's own config file, per machine — run step 2 again there.
+- `rendering: ready` is per machine too. A machine without ffmpeg or Chrome generates clips
+  perfectly well and renders nothing.
+- A project carries its own `.fuse/job.json`. Copy the **whole directory** and `fuse_scenes` picks
+  up where it left off; copy only the clips and that record is gone, so a re-run pays again.
+- An API key cannot read your token balance, so quote first and keep the ceiling honest.
 
 ## The tools
 
