@@ -1,6 +1,6 @@
 {
   "name": "@fuseai/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fuse AI tools for coding agents: generate video scenes with Fuse, edit them locally with HyperFrames.",
   "type": "module",
   "engines": {
