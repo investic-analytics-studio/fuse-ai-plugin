@@ -92,6 +92,15 @@ export interface FileToUpload {
   /** The name the customer will recognise it by, not a path. */
   readonly name: string;
   readonly bytes: Uint8Array;
+  /**
+   * The file's own media type, e.g. `image/png`.
+   *
+   * It has to be carried here rather than guessed on the way out: the bytes
+   * travel as a `Blob`, and a `Blob` with no type is sent as
+   * `application/octet-stream`, which the upload endpoint refuses for every
+   * file whatever its size.
+   */
+  readonly contentType: string;
   /** The server's own word for the kind of asset, e.g. "image". */
   readonly mediaKind: string;
   /** Groups a job's files into one folder; any stable string will do. */
@@ -133,12 +142,19 @@ export class FuseHttp implements Transport {
    * It goes through its own method rather than `post` because the body is
    * multipart: the server wants the bytes under `file` and everything else as
    * one JSON string under `metadata`, which is the shape the web app sends.
-   * `fetch` writes the boundary itself, so Content-Type is left unset here —
-   * setting it by hand is the usual way this breaks.
+   * `fetch` writes the boundary of the request itself, so the request's own
+   * Content-Type is left unset here — setting it by hand is the usual way this
+   * breaks.
+   *
+   * The file's part is a different header, and that one is ours to set. The
+   * endpoint admits `image/*`, `video/*` and `audio/mpeg` and refuses the rest
+   * (`ValidContentTypeWildCard`), so a `Blob` left untyped arrives as
+   * `application/octet-stream` and is turned away — under a message that reads
+   * `file too large`, because that is the text the error code carries.
    */
   async upload(file: FileToUpload): Promise<string> {
     const form = new FormData();
-    form.append("file", new Blob([file.bytes]), file.name);
+    form.append("file", new Blob([file.bytes], { type: file.contentType }), file.name);
     form.append(
       "metadata",
       JSON.stringify({ dir_name: "assets", group_uuid: file.groupId, media_kind: file.mediaKind }),

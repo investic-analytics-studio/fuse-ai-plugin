@@ -150,11 +150,22 @@ function uploadOf(deps: ToolDeps): UploadPort {
 }
 
 /**
- * What the server should file the asset as. Only images matter here — an
- * image-to-video tier is the reason this tool exists — so anything else is
- * refused by name rather than guessed at and filed wrongly.
+ * What the server should file the asset as, and what each kind is called on
+ * the wire. Only images matter here — an image-to-video tier is the reason
+ * this tool exists — so anything else is refused by name rather than guessed
+ * at and filed wrongly.
+ *
+ * The media type is read from the extension rather than from the bytes: the
+ * upload endpoint judges the part's declared type, and a file whose name lies
+ * about its contents is a problem the server is better placed to catch than
+ * this tool is.
  */
-const IMAGE_SUFFIXES = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+const IMAGE_TYPES = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"],
+]);
 
 /** Big enough for any product photo, small enough that a wrong path is caught. */
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -270,10 +281,11 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
         for (const entry of files) {
           const path = dirOf(entry);
           const suffix = extname(path).toLowerCase();
-          if (!IMAGE_SUFFIXES.has(suffix)) {
+          const contentType = IMAGE_TYPES.get(suffix);
+          if (!contentType) {
             throw new Error(
               `${entry} is ${suffix || "extensionless"}; this uploads images ` +
-                `(${[...IMAGE_SUFFIXES].join(", ")}). A video scene comes from fuse_scenes, ` +
+                `(${[...IMAGE_TYPES.keys()].join(", ")}). A video scene comes from fuse_scenes, ` +
                 "not from a file.",
             );
           }
@@ -291,6 +303,7 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
           const url = await upload({
             name: basename(path),
             bytes: await readFile(path),
+            contentType,
             mediaKind: "image",
             groupId: group,
           }).catch((error: unknown) => {

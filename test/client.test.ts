@@ -24,6 +24,8 @@ interface Call {
   url: string;
   auth?: string;
   body: unknown;
+  /** Multipart is kept as it arrived: the part headers are the point of it. */
+  raw?: string;
 }
 
 /** One reply per call, in order; the default is "run started". */
@@ -47,11 +49,13 @@ function read(request: IncomingMessage): Promise<string> {
 
 const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
   const text = await read(request);
+  const multipart = (request.headers["content-type"] ?? "").startsWith("multipart/form-data");
   calls.push({
     method: request.method ?? "",
     url: request.url ?? "",
     auth: request.headers.authorization,
-    body: text ? JSON.parse(text) : undefined,
+    body: multipart || !text ? undefined : JSON.parse(text),
+    ...(multipart ? { raw: text } : {}),
   });
   if ((request.url ?? "").startsWith("/v1/api/pricing")) {
     response.writeHead(200, { "Content-Type": "application/json" });
@@ -73,6 +77,12 @@ function fresh(apiKey: string | undefined = "test-key"): Runs {
   calls.length = 0;
   replies = [];
   return new Runs(new FuseHttp({ baseUrl, apiKey, timeoutMs: 5_000 }));
+}
+
+function freshHttp(apiKey: string | undefined = "test-key"): FuseHttp {
+  calls.length = 0;
+  replies = [];
+  return new FuseHttp({ baseUrl, apiKey, timeoutMs: 5_000 });
 }
 
 const spec: JobSpec = {
@@ -274,4 +284,64 @@ test("pricing is fetched without a key, and parses as the recorded fixture does"
   assert.equal(calls[0]!.url, "/v1/api/pricing");
   assert.equal(calls[0]!.auth, undefined, "pricing is public; no key should be sent");
   assert.equal(catalog.tier("t2v-low-standard").baseTokens, 20);
+});
+
+/* ----------------------------------------------------------------- uploading */
+
+const uploaded = {
+  status: { code: "SUC_201", message: ["Created"] },
+  data: { downloadUrl: "https://storage.googleapis.com/bucket/assets/job-1/bottle.png" },
+};
+
+test("an uploaded file declares its own media type on its part of the body", async () => {
+  // Prod reads this header and refuses anything outside image/*, video/* and
+  // audio/mpeg. An untyped Blob goes out as application/octet-stream, which
+  // was refused for every file, 54 KB included, under the message the error
+  // code happens to carry: "file too large".
+  const http = freshHttp();
+  replies = [{ status: 201, body: uploaded }];
+  const url = await http.upload({
+    name: "bottle.png",
+    bytes: new Uint8Array([137, 80, 78, 71]),
+    contentType: "image/png",
+    mediaKind: "image",
+    groupId: "job-1",
+  });
+
+  assert.equal(url, "https://storage.googleapis.com/bucket/assets/job-1/bottle.png");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.method, "POST");
+  assert.equal(calls[0]!.url, "/v1/api/upload");
+  assert.equal(calls[0]!.auth, "Bearer test-key");
+
+  const raw = calls[0]!.raw ?? "";
+  assert.match(raw, /name="file"; filename="bottle\.png"/);
+  assert.match(raw, /Content-Type: image\/png/);
+  assert.doesNotMatch(raw, /application\/octet-stream/);
+  // The metadata the web app sends alongside, in the same shape.
+  assert.match(raw, /name="metadata"/);
+  assert.deepEqual(JSON.parse(raw.split("\r\n\r\n").pop()!.split("\r\n")[0]!), {
+    dir_name: "assets",
+    group_uuid: "job-1",
+    media_kind: "image",
+  });
+});
+
+test("a refusal of the upload reaches the caller in the server's own words", async () => {
+  const http = freshHttp();
+  replies = [
+    { status: 400, body: { status: { code: "ERR_6002", message: ["file too large", "not support file"] } } },
+  ];
+  await assert.rejects(
+    () =>
+      http.upload({
+        name: "script.txt",
+        bytes: new Uint8Array([1]),
+        contentType: "text/plain",
+        mediaKind: "image",
+        groupId: "job-1",
+      }),
+    (error: unknown) =>
+      error instanceof FuseError && error.kind === "rejected" && /not support file/.test(error.detail),
+  );
 });

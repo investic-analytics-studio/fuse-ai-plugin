@@ -88,7 +88,13 @@ interface Harness {
   argv: string[][];
   fetched: string[];
   voice?: FakeVoice;
-  uploaded: Array<{ name: string; bytes: number; mediaKind: string; groupId: string }>;
+  uploaded: Array<{
+    name: string;
+    bytes: number;
+    contentType: string;
+    mediaKind: string;
+    groupId: string;
+  }>;
 }
 
 function harness(
@@ -144,10 +150,17 @@ function harness(
   const uploaded: Harness["uploaded"] = [];
   const wantUpload = options.upload ?? true;
   const upload = wantUpload
-    ? async (file: { name: string; bytes: Uint8Array; mediaKind: string; groupId: string }) => {
+    ? async (file: {
+        name: string;
+        bytes: Uint8Array;
+        contentType: string;
+        mediaKind: string;
+        groupId: string;
+      }) => {
         uploaded.push({
           name: file.name,
           bytes: file.bytes.byteLength,
+          contentType: file.contentType,
           mediaKind: file.mediaKind,
           groupId: file.groupId,
         });
@@ -707,8 +720,37 @@ test("an image on disk becomes a url the API itself can fetch", async () => {
   // an image. A tool that answered a url without sending anything would pass
   // every other assertion here.
   assert.deepEqual(bench.uploaded, [
-    { name: "bottle.jpg", bytes: 64, mediaKind: "image", groupId: "job-under-test" },
+    {
+      name: "bottle.jpg",
+      bytes: 64,
+      contentType: "image/jpeg",
+      mediaKind: "image",
+      groupId: "job-under-test",
+    },
   ]);
+});
+
+test("every extension it accepts travels under its own media type", async () => {
+  // The endpoint reads the part's declared type and refuses anything outside
+  // image/*, video/* and audio/mpeg, so an extension that reached it unnamed
+  // would be turned away however small the file was.
+  const bench = harness();
+  const files = [
+    await imageFile("a.png"),
+    await imageFile("b.jpg"),
+    await imageFile("c.jpeg"),
+    await imageFile("d.webp"),
+  ];
+  await bench.tool("fuse_upload").run({ files });
+  assert.deepEqual(
+    bench.uploaded.map((u) => [u.name, u.contentType]),
+    [
+      ["a.png", "image/png"],
+      ["b.jpg", "image/jpeg"],
+      ["c.jpeg", "image/jpeg"],
+      ["d.webp", "image/webp"],
+    ],
+  );
 });
 
 test("files uploaded together share one folder, and a job can name it", async () => {
