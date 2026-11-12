@@ -35,7 +35,14 @@ test("what a customer runs is JavaScript, and it is what gets shipped", () => {
   const [entry] = targets;
   assert.ok(entry, "the package declares no bin, so npx has nothing to run");
   assert.match(entry, /\.js$/, "a .ts bin cannot run from node_modules");
-  assert.match(entry, /^\.\/dist\//, "the bin must come from the build, not from src");
+  assert.match(entry, /^dist\//, "the bin must come from the build, not from src");
+  // Spelled `./dist/index.js` it still runs, but npm rewrites it to
+  // `dist/index.js` when publishing and prints `script name ... was invalid
+  // and removed` while it does, which reads like the command was thrown away.
+  // It was not — the registry metadata keeps it, and 0.2.0 installs and runs
+  // from npx — but nobody reading a release log can tell that. So the spelling
+  // here is the one npm stores, and the warning has nothing left to say.
+  assert.doesNotMatch(entry, /^\.\//, "npm will rewrite this on publish and warn while doing it");
   assert.ok(manifest.files.includes("dist"), "the build is not in the published files");
   assert.ok(!manifest.files.includes("src"), "shipping src again invites the .ts bin back");
   // prepack runs for `npm publish` and `npm pack` alike, so the build cannot
