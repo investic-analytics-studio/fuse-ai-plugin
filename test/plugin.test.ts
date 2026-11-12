@@ -34,7 +34,17 @@ const COMMANDS = readdirSync(root + "commands")
   .filter((name) => name.endsWith(".md"))
   .map((name) => `commands/${name}`)
   .sort();
-const PAGES = [...SKILLS.map((skill) => `skills/${skill}/SKILL.md`), ...COMMANDS];
+/**
+ * The one page Codex reads. It is not a skill of the plugin and not a command:
+ * Codex has neither, so this is where the gates and the routing are repeated
+ * for it. It is held to every rule the other pages are held to.
+ */
+const CODEX_PAGE = "codex/SKILL.md";
+const PAGES = [
+  ...SKILLS.map((skill) => `skills/${skill}/SKILL.md`),
+  ...COMMANDS,
+  CODEX_PAGE,
+];
 
 /** The real tool names, from the code that registers them. */
 const toolNames = createTools({
@@ -124,7 +134,7 @@ test("the listing icon is one the directory accepts, and stays visible on a dark
 });
 
 test("no file in the plugin shell carries a key", () => {
-  for (const file of [".mcp.json", "README.md", "README.th.md", ...COMMANDS]) {
+  for (const file of [".mcp.json", "README.md", "README.th.md", CODEX_PAGE, ...COMMANDS]) {
     const text = read(file);
     assert.doesNotMatch(text, /sk-[A-Za-z0-9]{8}/, `${file} looks like it holds a key`);
     assert.doesNotMatch(
@@ -191,6 +201,23 @@ test("the skills a customer installs are the skills the package publishes", () =
   // the repository and for nobody who ran `npx -y @fuseai/mcp`.
   const files = json("package.json").files as string[];
   assert.ok(files.includes("skills"), "the skills folder is not in the published files");
+  // The installer reads this one off disk at install time to write it into
+  // Codex. Left out of `files`, `npx -y @fuseai/mcp install` fails on a
+  // machine that has Codex and works on one that does not.
+  assert.ok(files.includes("codex"), "the page Codex reads is not in the published files");
+});
+
+test("the page Codex reads routes to every stage and every genre", () => {
+  // Codex gets no commands, so if a genre is not named here it is reachable
+  // only by a customer who already knows it exists.
+  const text = read(CODEX_PAGE);
+  for (const skill of SKILLS) {
+    assert.ok(text.includes(skill), `the Codex page never mentions ${skill}`);
+  }
+  // And the gates, which on Claude Code are repeated on every command.
+  for (const gate of ["fuse_quote", "fuse_manifest", "fuse_upload"]) {
+    assert.ok(text.includes(gate), `the Codex page drops the ${gate} gate`);
+  }
 });
 
 test("every tool a skill, a command or a README names is a tool we ship", () => {

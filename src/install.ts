@@ -18,7 +18,8 @@
  * There are two because they are two accounts — Fuse bills the clips, and the
  * customer's own ElevenLabs account bills the voiceover.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ensureDeps, type DepReport, type Runner, type ScaffoldDeps } from "./project/scaffold.ts";
 
 /** The name the server is registered under, in every client. */
@@ -118,6 +119,104 @@ const CLIENTS: readonly ClientSpec[] = [
   },
 ];
 
+/* ------------------------------------------------------------ Codex skills */
+
+/**
+ * The name the whole playbook goes in under on Codex.
+ *
+ * Claude Code reads a plugin folder, so there the four stages and the four
+ * genres are eight skills and the plugin keeps them apart. Codex has no such
+ * folder: it reads `$CODEX_HOME/skills/<name>/SKILL.md`, one flat namespace
+ * shared with every other vendor on the machine and with its own system
+ * skills. Putting eight directories called things like `01-analysis` into
+ * somebody else`s namespace is how two products quietly shadow each other, so
+ * all of it goes in under one name that says whose it is, with the eight as
+ * reference pages — the shape Codex uses itself, where `imagegen` is a
+ * SKILL.md plus a references folder.
+ */
+export const CODEX_SKILL = "fuse-video";
+
+/** Where the package root is, from wherever this file was built to. */
+function packageRoot(): string {
+  return fileURLToPath(new URL("..", import.meta.url));
+}
+
+export interface SkillFile {
+  /** Path inside the installed skill folder. */
+  readonly to: string;
+  /** What it says. Read from this package, never retyped. */
+  readonly text: string;
+}
+
+/**
+ * Every file the Codex skill is made of.
+ *
+ * The reference list is read off the `skills/` directory rather than written
+ * out here, so a skill added for Claude Code reaches Codex too without
+ * anybody remembering to edit this file.
+ */
+export function codexSkillFiles(): readonly SkillFile[] {
+  const root = packageRoot();
+  const files: SkillFile[] = [
+    { to: "SKILL.md", text: readFileSync(root + "codex/SKILL.md", "utf8") },
+  ];
+  for (const skill of readdirSync(root + "skills").sort()) {
+    files.push({
+      to: `references/${skill}.md`,
+      text: readFileSync(`${root}skills/${skill}/SKILL.md`, "utf8"),
+    });
+  }
+  return files;
+}
+
+/**
+ * Where Codex keeps its skills, and how to write one. Injected so a test can
+ * watch what would be written without touching the machine running it.
+ */
+export interface SkillSink {
+  /** The skills directory, or undefined when Codex has never run here. */
+  readonly dir?: string;
+  readonly write: (path: string, text: string) => Promise<void>;
+}
+
+export interface SkillResult {
+  readonly state: InstallState;
+  /** The folder the pages went into. */
+  readonly dir?: string;
+  readonly files?: number;
+  readonly detail?: string;
+}
+
+async function writeCodexSkill(
+  sink: SkillSink | undefined,
+  dryRun: boolean,
+): Promise<SkillResult> {
+  if (!sink?.dir) return { state: "absent" };
+  // The sink gives a path in the host platform’s own spelling, and a report
+  // that reads `C:\Users\...\skills/fuse-video` looks like a bug to the person
+  // reading it even though it opens fine. So the separator is taken from the
+  // directory rather than assumed.
+  const root = sink.dir.replace(/[\/]+$/, "");
+  const sep = root.includes("\\") ? "\\" : "/";
+  const dir = `${root}${sep}${CODEX_SKILL}`;
+  const at = (to: string): string => `${dir}${sep}${to.split("/").join(sep)}`;
+  let files: readonly SkillFile[];
+  try {
+    files = codexSkillFiles();
+  } catch (error) {
+    // The package is on disk, so this is a packaging mistake rather than a
+    // machine problem: say so instead of reporting Codex as not installed.
+    return { state: "failed", dir, detail: `this package is missing its own pages: ${error}` };
+  }
+  if (dryRun) return { state: "would-install", dir, files: files.length };
+  try {
+    for (const file of files) await sink.write(at(file.to), file.text);
+  } catch (error) {
+    return { state: "failed", dir, files: files.length, detail: String(error) };
+  }
+  return { state: "installed", dir, files: files.length };
+}
+
 /** A client that has no CLI to ask, so the steps are printed instead. */
 const BY_HAND: readonly { readonly name: string; readonly steps: readonly string[] }[] = [
   {
@@ -155,6 +254,8 @@ export interface InstallReport {
   readonly clients: readonly ClientResult[];
   readonly byHand: readonly { readonly name: string; readonly steps: readonly string[] }[];
   readonly machine: DepReport;
+  /** What happened to the playbook pages Codex reads. */
+  readonly skills: SkillResult;
   readonly keyFound: boolean;
   /** Whether a key for the customer's own ElevenLabs account was in the environment. */
   readonly voiceKeyFound: boolean;
@@ -170,6 +271,12 @@ export interface InstallOptions {
   readonly dryRun?: boolean;
   readonly cwd?: string;
   readonly packageSpec?: string;
+  /**
+   * Where to put the playbook for Codex. Left out, nothing is written and the
+   * report says so — an installer that silently writes into a home directory
+   * nobody asked about is worse than one that says it skipped it.
+   */
+  readonly skills?: SkillSink;
 }
 
 /**
@@ -281,8 +388,24 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     }
   }
 
+  const skills = await writeCodexSkill(options.skills, dryRun);
   const machine = await ensureDeps(cwd, deps);
   const notes: string[] = [...shadowed];
+  if (skills.state === "installed" || skills.state === "would-install") {
+    notes.push(
+      `Codex reads its skills from disk at startup, so the playbook under ${skills.dir} ` +
+        "is there from its next session, not this one. Claude Code gets the same pages from " +
+        "the plugin instead, and does not need these.",
+    );
+  }
+  if (skills.state === "failed") {
+    notes.push(
+      `The server is registered, but the playbook pages could not be written to ${skills.dir}: ` +
+        (skills.detail ?? "no reason given") +
+        ". Codex will have the tools and no instructions for them, which is the expensive way " +
+        "round: it can call fuse_scenes without ever being told to quote first.",
+    );
+  }
   if (!apiKey) {
     notes.push(
       "No FUSE_API_KEY was set, so the server was registered without one. Listing tiers and " +
@@ -323,6 +446,7 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     clients: results,
     byHand: BY_HAND,
     machine,
+    skills,
     keyFound: Boolean(apiKey),
     voiceKeyFound: Boolean(voiceKey),
     notes,
@@ -353,6 +477,12 @@ export function format(report: InstallReport): string {
       for (const step of client.steps) lines.push(`    ${step}`);
     }
   }
+  lines.push("", `  Codex playbook: ${LABEL[report.skills.state]}`);
+  if (report.skills.dir) {
+    const count = report.skills.files;
+    lines.push(`    ${count === undefined ? "" : `${count} pages into `}${report.skills.dir}`);
+  }
+  if (report.skills.detail) lines.push(`    ${report.skills.detail}`);
   lines.push("", `  rendering: ${report.machine.ok ? "ready" : "not ready"}`);
   // Doctor's full text only when it matters. It reports optional extras this
   // package never uses (transcription, local TTS, local music, Docker) and
