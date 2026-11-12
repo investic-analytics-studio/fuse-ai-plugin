@@ -9,7 +9,7 @@
     {
       "name": "fuse",
       "source": "./",
-      "description": "Make a product ad end to end: analyse, plan, generate the scenes with Fuse, then edit and render locally with HyperFrames."
+      "description": "Make a video end to end by the kind of job it is (food, product, series, cartoon): analyse, plan, generate the scenes with Fuse, then edit and render locally with HyperFrames."
     }
   ]
 }

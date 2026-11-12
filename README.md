@@ -8,8 +8,20 @@ and renders them on your own machine with [HyperFrames](https://www.npmjs.com/pa
 Generating spends Fuse tokens. Everything after that — composing, captioning, mixing, rendering —
 runs locally and costs nothing.
 
-It ships as both an MCP server (any client) and a Claude Code plugin (the server plus the four-step
-ad playbook and a `/make-ad` command).
+It ships as both an MCP server (any client) and a Claude Code plugin — the server, the four-step
+playbook, and a command for each kind of job, with the genre skill that kind of job needs:
+
+| Job | Command | Genre skill |
+|---|---|---|
+| Food, drink, a shop, a review of something edible | `/fuse:food` | `genre-food` |
+| A product whose pack and brand must match in every frame | `/fuse:product` | `genre-product` |
+| Something continuous: episodes, or a plot across scenes | `/fuse:series` | `genre-series` |
+| Cartoon, animation, explainer | `/fuse:vox` | `genre-vox` |
+| An ad with no kind named yet | `/fuse:make-ad` | routes to the four above |
+
+The four steps — `01-analysis`, `02-planning`, `03-generation`, `04-editing` — run for every one of
+them. A genre skill is not a fifth step: it is what those four need to know extra, and only the
+generation step spends tokens.
 
 ## Requirements
 
@@ -35,7 +47,7 @@ It does not edit anyone's config file. It runs each client's own CLI — `claude
 `codex mcp add` — because those own that file, know where it lives on each platform, and merge into
 it safely. It reports a client it cannot find, and prints by-hand steps for a client that has no CLI.
 
-**Claude Code, as a plugin** (adds the skills and `/make-ad` as well as the server):
+**Claude Code, as a plugin** (adds the skills and `/fuse:make-ad` as well as the server):
 
 ```
 /plugin marketplace add investic-analytics-studio/fuse-ai-plugin
