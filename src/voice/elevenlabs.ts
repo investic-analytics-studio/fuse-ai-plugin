@@ -22,9 +22,17 @@ export const ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
 /**
  * The model used when the caller names none: ElevenLabs' own default for this
- * endpoint, and one that speaks Thai. It stays a default rather than a
- * constant because `fuse_voices` reports what the account can actually use —
- * a package that insisted on one model id would outlive it.
+ * endpoint. It stays a default rather than a constant because `fuse_voices`
+ * reports what the account can actually use — a package that insisted on one
+ * model id would outlive it.
+ *
+ * **It does not speak Thai.** This comment claimed it did until a live account
+ * was read: the model list gives multilingual v2 twenty-nine languages and Thai
+ * is not among them. Nothing refuses a Thai script sent to it, so it answers,
+ * charges, and reads the words as something else — which is why `narrate`
+ * checks the language of the script against the model before it spends. A
+ * Thai job has to name a model that lists `th`, and `fuse_voices` is where to
+ * see which ones do.
  */
 export const DEFAULT_VOICE_MODEL = "eleven_multilingual_v2";
 

@@ -26,6 +26,7 @@ import {
   DEFAULT_VOICE_MODEL,
   VOICE_OUTPUT_FORMAT,
   VoiceError,
+  type VoiceModelInfo,
   type VoicePort,
 } from "./elevenlabs.ts";
 import type { ProbeDuration } from "../project/scaffold.ts";
@@ -60,7 +61,9 @@ export type NarrationStop =
   | "over_budget"
   | "quota_exhausted"
   | "rejected_by_api"
-  | "provider_failed";
+  | "provider_failed"
+  /** The model named cannot read the language the script is written in. */
+  | "model_cannot_speak_script";
 
 export interface NarrationReport {
   readonly voiceId: string;
@@ -109,6 +112,61 @@ export interface NarrateOptions {
  */
 export function characterCount(text: string): number {
   return [...text].length;
+}
+
+/**
+ * Writing systems that name their language on sight, with the language id a
+ * model has to list to be able to read them.
+ *
+ * Only Thai is here, and that is deliberate. A script is usually not enough to
+ * pin a language down — Han is Chinese or Japanese, Arabic script is Arabic or
+ * Persian or Urdu — so guessing from the characters would refuse work that was
+ * fine. Thai script is Thai, Thai is the language this package is documented
+ * and sold in, and the default model cannot read it, so it is the one worth
+ * stopping for.
+ */
+const SCRIPT_LANGUAGES: ReadonlyArray<{ language: string; pattern: RegExp }> = [
+  { language: "th", pattern: /[฀-๿]/ },
+];
+
+/** The language ids a model must list to read these lines, as far as can be told. */
+export function languagesRequiredBy(lines: readonly NarrationLine[]): readonly string[] {
+  const text = lines.map((line) => line.text).join("");
+  return SCRIPT_LANGUAGES.filter(({ pattern }) => pattern.test(text)).map(
+    ({ language }) => language,
+  );
+}
+
+/**
+ * Why this is a stop and not a warning: a model that does not list the
+ * language still answers, still charges the account, and hands back audio of
+ * something other than the words on the page. There is no refund and no way to
+ * tell from the file size that it happened — only by listening.
+ *
+ * The live model list decides, never a table in here, so the day a language is
+ * added to a model this starts allowing it without anyone editing this file.
+ */
+function unreadableScript(
+  modelId: string,
+  required: readonly string[],
+  models: readonly VoiceModelInfo[],
+): string | undefined {
+  const chosen = models.find((model) => model.id === modelId);
+  // A model the account does not list is not evidence of anything: it may be
+  // new, or private. The synthesis call is the authority on that one.
+  if (!chosen) return undefined;
+  const missing = required.filter((language) => !chosen.languages.includes(language));
+  if (missing.length === 0) return undefined;
+  const able = models
+    .filter((model) => required.every((language) => model.languages.includes(language)))
+    .map((model) => model.id);
+  return (
+    `${modelId} does not list ${missing.join(", ")} among the languages it speaks, and the ` +
+    "script is written in it. Nothing was spoken and nothing was charged. " +
+    (able.length > 0
+      ? `Pass modelId as one of: ${able.join(", ")}`
+      : "No model on this account lists that language; see fuse_voices")
+  );
 }
 
 /**
@@ -258,6 +316,23 @@ export async function narrate(
   });
 
   if (needed.length === 0) return report(0);
+
+  // Checked before the dry run returns, so the language comes up while the
+  // price is being agreed rather than after the audio is paid for. Reading the
+  // model list costs nothing.
+  const required = languagesRequiredBy(needed.map((entry) => entry.line));
+  if (required.length > 0) {
+    let models: readonly VoiceModelInfo[] | undefined;
+    try {
+      models = await deps.voice.models();
+    } catch {
+      // Not being able to check is not the same as knowing it is wrong: a
+      // network hiccup here must not become a refusal to do work that would
+      // have been fine. The synthesis call stays the authority.
+    }
+    const unreadable = models && unreadableScript(modelId, required, models);
+    if (unreadable) return report(0, "model_cannot_speak_script", unreadable);
+  }
 
   // Priced but not spoken. Checked before the budget so a dry run can report a
   // figure that is over the ceiling — that is exactly the number to go and

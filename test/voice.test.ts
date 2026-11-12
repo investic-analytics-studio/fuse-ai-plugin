@@ -42,6 +42,7 @@ const script: {
   speak: Array<{ status: number; body?: unknown; empty?: boolean } | undefined>;
   subscription: { character_count: number; character_limit: number };
   voicesStatus?: number;
+  modelsStatus?: number;
 } = {
   speak: [],
   subscription: { character_count: 0, character_limit: 1_000_000 },
@@ -52,6 +53,7 @@ beforeEach(() => {
   script.speak = [];
   script.subscription = { character_count: 0, character_limit: 1_000_000 };
   script.voicesStatus = undefined;
+  script.modelsStatus = undefined;
 });
 
 function read(request: IncomingMessage): Promise<string> {
@@ -94,12 +96,26 @@ const server: Server = createServer(async (request, response) => {
     return;
   }
   if (url.startsWith("/v1/models")) {
+    if (script.modelsStatus) {
+      json(response, script.modelsStatus, { detail: "the model list is having a bad day" });
+      return;
+    }
+    // Shaped like the live account, which matters here: multilingual v2 is the
+    // default this package falls back to and it does **not** list Thai. The
+    // fixture used to give it Thai, and a fixture that is kinder than reality
+    // is how a Thai script came to be sent to a model that cannot read it.
     json(response, 200, [
       {
         model_id: "eleven_multilingual_v2",
         name: "Multilingual v2",
         can_do_text_to_speech: true,
-        languages: [{ language_id: "th", name: "Thai" }, { language_id: "en", name: "English" }],
+        languages: [{ language_id: "en", name: "English" }, { language_id: "ja", name: "Japanese" }],
+      },
+      {
+        model_id: "eleven_v3",
+        name: "Eleven v3",
+        can_do_text_to_speech: true,
+        languages: [{ language_id: "en", name: "English" }, { language_id: "th", name: "Thai" }],
       },
       { model_id: "scribe_v1", name: "Scribe", can_do_text_to_speech: false },
     ]);
@@ -146,13 +162,22 @@ async function workspace(): Promise<string> {
 function run(
   dir: string,
   lines: ReadonlyArray<{ slug: string; text: string }>,
-  options: { maxCharacters?: number; dryRun?: boolean; probe?: boolean } = {},
+  options: {
+    maxCharacters?: number;
+    dryRun?: boolean;
+    probe?: boolean;
+    modelId?: string;
+  } = {},
 ): Promise<NarrationReport> {
   return narrate(
     dir,
     lines,
     {
       voiceId: "v-thai-female",
+      // These scripts are Thai, so a model that reads Thai is named: the
+      // fallback cannot, and every test below would stop on that instead of
+      // on the thing it is about.
+      modelId: options.modelId ?? "eleven_v3",
       maxCharacters: options.maxCharacters ?? 10_000,
       ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
     },
@@ -238,9 +263,10 @@ test("a model that cannot speak is not offered as a voice", async () => {
   const models = await client().models();
   assert.deepEqual(
     models.map((model) => model.id),
-    ["eleven_multilingual_v2"],
+    ["eleven_multilingual_v2", "eleven_v3"],
   );
-  assert.ok(models[0]!.languages.includes("th"), "Thai has to be visible to pick a model by it");
+  const thai = models.filter((model) => model.languages.includes("th")).map((model) => model.id);
+  assert.deepEqual(thai, ["eleven_v3"], "Thai has to be visible to pick a model by it");
 });
 
 test("a voice with no id is dropped rather than carried as a blank choice", async () => {
@@ -397,7 +423,7 @@ test("audio that cannot be measured is still kept, because it was paid for", asy
   const report = await narrate(
     dir,
     [{ slug: "hook", text: "ชาไทย" }],
-    { voiceId: "v-thai-female", maxCharacters: 100 },
+    { voiceId: "v-thai-female", modelId: "eleven_v3", maxCharacters: 100 },
     {
       voice: client(),
       probeDuration: async () => {
@@ -408,4 +434,81 @@ test("audio that cannot be measured is still kept, because it was paid for", asy
   assert.equal(report.lines[0]!.state, "spoken");
   assert.equal(report.lines[0]!.seconds, undefined);
   assert.ok(existsSync(join(dir, report.lines[0]!.file!)));
+});
+
+/* --------------------------------------------------- the language of the script */
+
+test("a Thai script is not sent to a model that cannot read it", async () => {
+  // The refusal that matters most, because nothing else catches it: a model
+  // without Thai answers, charges, and hands back audio of something other
+  // than the words on the page. Only listening would reveal it, and by then
+  // the characters are gone.
+  const dir = await workspace();
+  const report = await run(dir, [{ slug: "hook", text: "ชาไทยเย็นหอมมัน" }], {
+    modelId: "eleven_multilingual_v2",
+  });
+  assert.equal(report.stopped, "model_cannot_speak_script");
+  assert.equal(report.charactersSpent, 0);
+  assert.equal(spoke().length, 0, "nothing may reach ElevenLabs, because it would be billed");
+  assert.equal(existsSync(join(dir, "assets", "audio")), false);
+  // The way out has to be in the message, or the caller is left guessing.
+  assert.match(report.detail!, /th/);
+  assert.match(report.detail!, /eleven_v3/, "the models that can read it have to be named");
+});
+
+test("the model the package falls back to is checked like any other", async () => {
+  // This is the real case rather than a contrived one: the fallback is
+  // multilingual v2, the documentation of this package is in Thai, and a job
+  // that names no model is the normal way in.
+  const dir = await workspace();
+  const report = await narrate(
+    dir,
+    [{ slug: "hook", text: "เทลงบนน้ำแข็ง" }],
+    { voiceId: "v-thai-female", maxCharacters: 1_000 },
+    { voice: client() },
+  );
+  assert.equal(report.stopped, "model_cannot_speak_script");
+  assert.equal(report.modelId, DEFAULT_VOICE_MODEL);
+  assert.equal(spoke().length, 0);
+});
+
+test("a dry run says so while the price is still being agreed", async () => {
+  // Finding out at the dry run costs nothing. Finding out after the real call
+  // costs the whole script.
+  const report = await run(await workspace(), [{ slug: "hook", text: "อร่อยจริง" }], {
+    modelId: "eleven_multilingual_v2",
+    dryRun: true,
+  });
+  assert.equal(report.stopped, "model_cannot_speak_script");
+  assert.equal(report.dryRun, true);
+  assert.equal(spoke().length, 0);
+});
+
+test("an English script is not held up by the Thai check", async () => {
+  // The check must not become a tax on every other job: no Thai in the script,
+  // no reason to ask the model list anything.
+  const report = await run(await workspace(), [{ slug: "hook", text: "pour it over ice" }], {
+    modelId: "eleven_multilingual_v2",
+  });
+  assert.equal(report.stopped, undefined);
+  assert.equal(report.lines[0]!.state, "spoken");
+  assert.equal(spoke().length, 1);
+  assert.equal(
+    calls.filter((call) => call.url.startsWith("/v1/models")).length,
+    0,
+    "an English script must not even ask which languages the model speaks",
+  );
+});
+
+test("a model list that cannot be read does not block work that may be fine", async () => {
+  // Being unable to check is not the same as knowing it is wrong. A refusal
+  // here would turn a bad minute at the model endpoint into a refusal to do
+  // work the account is paying for, and the synthesis call is the authority.
+  script.modelsStatus = 500;
+  const report = await run(await workspace(), [{ slug: "hook", text: "ชาไทย" }], {
+    modelId: "eleven_multilingual_v2",
+  });
+  assert.equal(report.stopped, undefined);
+  assert.equal(report.lines[0]!.state, "spoken");
+  assert.equal(spoke().length, 1);
 });
