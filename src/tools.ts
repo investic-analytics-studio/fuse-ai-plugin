@@ -617,7 +617,11 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
         "for the script twice. Renaming a scene is free; editing a word is new audio, because " +
         "it is. Two scenes that say the same thing share one file.\n\n" +
         "A stopped field says why it gave up early (over_budget, quota_exhausted, " +
-        "rejected_by_api, provider_failed) and detail carries ElevenLabs' own words.",
+        "rejected_by_api, provider_failed, model_cannot_speak_script) and detail carries the " +
+        "reason in words.\n\n" +
+        "model_cannot_speak_script means the script is in a language the model does not list: " +
+        "nothing was spoken and nothing was charged, and detail names the models that can read " +
+        "it. A Thai script is the usual case, because the default model does not speak Thai.",
       shape: {
         dir: projectDir,
         voiceId: z
@@ -629,7 +633,9 @@ export function createTools(deps: ToolDeps): readonly ToolDefinition[] {
           .min(1)
           .optional()
           .describe(
-            `A model id from fuse_voices. Defaults to ${DEFAULT_VOICE_MODEL}, which speaks Thai.`,
+            `A model id from fuse_voices. Defaults to ${DEFAULT_VOICE_MODEL}, which does NOT ` +
+              "speak Thai: for a Thai script, pass a model whose languages include th, or the " +
+              "call stops before spending anything.",
           ),
         maxCharacters: z
           .number()

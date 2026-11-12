@@ -19,7 +19,22 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (name: string): string => readFileSync(root + name, "utf8");
 const json = (name: string): Record<string, unknown> => JSON.parse(read(name));
 
-const SKILLS = ["01-analysis", "02-planning", "03-generation", "04-editing"];
+/** The pipeline: every job walks these four in order, whatever it is a job for. */
+const STAGES = ["01-analysis", "02-planning", "03-generation", "04-editing"];
+/**
+ * What a job is *about*. A genre skill is not a fifth step: it is what the four
+ * steps need to know extra, and the model is sent to it by its own command, so
+ * the two have to stay in step with each other.
+ */
+const GENRES = ["genre-food", "genre-product", "genre-series", "genre-vox"];
+const SKILLS = [...STAGES, ...GENRES];
+/** `genre-food` is driven by `/fuse:food`, and so on. */
+const commandOf = (genre: string): string => `commands/${genre.replace("genre-", "")}.md`;
+const COMMANDS = readdirSync(root + "commands")
+  .filter((name) => name.endsWith(".md"))
+  .map((name) => `commands/${name}`)
+  .sort();
+const PAGES = [...SKILLS.map((skill) => `skills/${skill}/SKILL.md`), ...COMMANDS];
 
 /** The real tool names, from the code that registers them. */
 const toolNames = createTools({
@@ -109,7 +124,7 @@ test("the listing icon is one the directory accepts, and stays visible on a dark
 });
 
 test("no file in the plugin shell carries a key", () => {
-  for (const file of [".mcp.json", "README.md", "commands/make-ad.md"]) {
+  for (const file of [".mcp.json", "README.md", "README.th.md", ...COMMANDS]) {
     const text = read(file);
     assert.doesNotMatch(text, /sk-[A-Za-z0-9]{8}/, `${file} looks like it holds a key`);
     assert.doesNotMatch(
@@ -122,8 +137,8 @@ test("no file in the plugin shell carries a key", () => {
 
 /* -------------------------------------------------------------------- skills */
 
-test("the four steps are there, and each names itself after its folder", () => {
-  assert.deepEqual(readdirSync(root + "skills").sort(), SKILLS);
+test("the skills on disk are the ones named here, and each names itself after its folder", () => {
+  assert.deepEqual(readdirSync(root + "skills").sort(), [...SKILLS].sort());
   for (const skill of SKILLS) {
     const text = read(`skills/${skill}/SKILL.md`);
     const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1];
@@ -133,18 +148,53 @@ test("the four steps are there, and each names itself after its folder", () => {
   }
 });
 
-test("the command declares itself", () => {
-  const front = /^---\n([\s\S]*?)\n---\n/.exec(read("commands/make-ad.md"))?.[1];
-  assert.ok(front, "make-ad has no frontmatter");
-  assert.match(front, /^description: \S/m);
+test("every command declares itself and says what to type after it", () => {
+  for (const command of COMMANDS) {
+    const front = /^---\n([\s\S]*?)\n---\n/.exec(read(command))?.[1];
+    assert.ok(front, `${command} has no frontmatter`);
+    assert.match(front, /^description: \S/m, `${command} has no description`);
+    assert.match(front, /^argument-hint: \S/m, `${command} never says what its argument is`);
+  }
 });
 
-test("every tool a skill or the README names is a tool we ship", () => {
-  const files = [
-    ...SKILLS.map((skill) => `skills/${skill}/SKILL.md`),
-    "commands/make-ad.md",
-    "README.md",
-  ];
+test("a genre is reachable: one command per genre skill, and it sends the model there", () => {
+  // A genre skill nothing points at is a file nobody opens; a command naming a
+  // skill that is not there sends the model reading into nothing. And a genre
+  // does not replace the pipeline, so its command still has to walk all four.
+  for (const genre of GENRES) {
+    const command = commandOf(genre);
+    assert.ok(COMMANDS.includes(command), `${genre} has no command: ${command} is missing`);
+    const text = read(command);
+    assert.ok(text.includes(genre), `${command} never tells the model to read ${genre}`);
+    for (const stage of STAGES) {
+      assert.ok(text.includes(stage), `${command} skips ${stage}; every genre walks all four`);
+    }
+  }
+  const owned = new Set(["commands/make-ad.md", ...GENRES.map(commandOf)]);
+  for (const command of COMMANDS) {
+    assert.ok(owned.has(command), `${command} belongs to no genre: add one, or add it to GENRES`);
+  }
+});
+
+test("the command that names no genre routes to all of them", () => {
+  // make-ad is the way in when nobody has named a genre yet. If a genre is
+  // added and this page is not touched, the genre is reachable only by someone
+  // who already knows its command exists, which is nobody being helped.
+  const text = read("commands/make-ad.md");
+  for (const genre of GENRES) {
+    assert.ok(text.includes(genre), `make-ad does not mention ${genre}`);
+  }
+});
+
+test("the skills a customer installs are the skills the package publishes", () => {
+  // `files` is what reaches npm. A skill outside it exists for whoever cloned
+  // the repository and for nobody who ran `npx -y @fuseai/mcp`.
+  const files = json("package.json").files as string[];
+  assert.ok(files.includes("skills"), "the skills folder is not in the published files");
+});
+
+test("every tool a skill, a command or a README names is a tool we ship", () => {
+  const files = [...PAGES, "README.md", "README.th.md"];
   for (const file of files) {
     for (const [mentioned] of read(file).matchAll(/fuse_[a-z_]+/g)) {
       assert.ok(
@@ -159,14 +209,18 @@ test("nothing may talk about spending without naming the quote that gates it", (
   // The budget gate is a rule of the playbook, not of the code: fuse_scenes
   // happily spends up to whatever maxTokens it is handed. So every page that
   // tells the model to generate must also tell it where the number comes from.
-  const pages = [...SKILLS.map((skill) => `skills/${skill}/SKILL.md`), "commands/make-ad.md"];
-  for (const page of pages) {
+  for (const page of PAGES) {
     const text = read(page);
     if (!text.includes("fuse_scenes")) continue;
     assert.ok(
       text.includes("fuse_quote"),
       `${page} sends the model to fuse_scenes without naming fuse_quote first`,
     );
+  }
+  // A command is the first page the model reads for a job, so the gate has to
+  // be on it whether or not it happens to spell the spending tool by name.
+  for (const command of COMMANDS) {
+    assert.ok(read(command).includes("fuse_quote"), `${command} names no budget gate`);
   }
 });
 

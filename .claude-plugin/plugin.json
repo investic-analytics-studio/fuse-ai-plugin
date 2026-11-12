@@ -1,7 +1,7 @@
 {
   "name": "fuse",
-  "version": "0.1.0",
-  "description": "Make a product ad end to end: analyse the assets, plan and storyboard it, generate the scenes with Fuse's API, then edit and render locally with HyperFrames. Generating runs on Fuse and spends tokens; editing and rendering run on this machine.",
+  "version": "0.2.0",
+  "description": "Make a video end to end, by the kind of job it is: food, product, a continuous series, or cartoon. Analyse the assets, plan and storyboard, generate the scenes with the API of Fuse, then edit and render locally with HyperFrames. Generating spends tokens; editing and rendering run on this machine.",
   "author": {
     "name": "Fuse AI"
   },
@@ -10,6 +10,12 @@
     "fuse",
     "video",
     "ads",
+    "food",
+    "product",
+    "series",
+    "cartoon",
+    "animation",
+    "explainer",
     "text-to-video",
     "image-to-video",
     "hyperframes"
