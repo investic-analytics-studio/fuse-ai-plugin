@@ -7,7 +7,7 @@
     "node": ">=22.18.0"
   },
   "bin": {
-    "fuse-mcp": "./dist/index.js"
+    "fuse-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
