@@ -27,14 +27,32 @@ const STAGES = ["01-analysis", "02-planning", "03-generation", "04-editing"];
  * the two have to stay in step with each other.
  */
 const GENRES = ["genre-food", "genre-product", "genre-series", "genre-vox"];
-const SKILLS = [...STAGES, ...GENRES];
+/**
+ * The way in. Not a stage: it produces nothing and spends nothing. It is the
+ * page that answers "where am I and what does the next step need first", for a
+ * customer who has just installed and is looking at eight tools and nine
+ * skills. On Codex it carries more weight still, since there are no commands
+ * there to route anybody.
+ */
+const ENTRY = "00-start";
+const SKILLS = [ENTRY, ...STAGES, ...GENRES];
 /** `genre-food` is driven by `/fuse:food`, and so on. */
 const commandOf = (genre: string): string => `commands/${genre.replace("genre-", "")}.md`;
 const COMMANDS = readdirSync(root + "commands")
   .filter((name) => name.endsWith(".md"))
   .map((name) => `commands/${name}`)
   .sort();
-const PAGES = [...SKILLS.map((skill) => `skills/${skill}/SKILL.md`), ...COMMANDS];
+/**
+ * The one page Codex reads. It is not a skill of the plugin and not a command:
+ * Codex has neither, so this is where the gates and the routing are repeated
+ * for it. It is held to every rule the other pages are held to.
+ */
+const CODEX_PAGE = "codex/SKILL.md";
+const PAGES = [
+  ...SKILLS.map((skill) => `skills/${skill}/SKILL.md`),
+  ...COMMANDS,
+  CODEX_PAGE,
+];
 
 /** The real tool names, from the code that registers them. */
 const toolNames = createTools({
@@ -124,7 +142,7 @@ test("the listing icon is one the directory accepts, and stays visible on a dark
 });
 
 test("no file in the plugin shell carries a key", () => {
-  for (const file of [".mcp.json", "README.md", "README.th.md", ...COMMANDS]) {
+  for (const file of [".mcp.json", "README.md", "README.th.md", CODEX_PAGE, ...COMMANDS]) {
     const text = read(file);
     assert.doesNotMatch(text, /sk-[A-Za-z0-9]{8}/, `${file} looks like it holds a key`);
     assert.doesNotMatch(
@@ -170,7 +188,11 @@ test("a genre is reachable: one command per genre skill, and it sends the model 
       assert.ok(text.includes(stage), `${command} skips ${stage}; every genre walks all four`);
     }
   }
-  const owned = new Set(["commands/make-ad.md", ...GENRES.map(commandOf)]);
+  const owned = new Set([
+    "commands/start.md",
+    "commands/make-ad.md",
+    ...GENRES.map(commandOf),
+  ]);
   for (const command of COMMANDS) {
     assert.ok(owned.has(command), `${command} belongs to no genre: add one, or add it to GENRES`);
   }
@@ -186,11 +208,49 @@ test("the command that names no genre routes to all of them", () => {
   }
 });
 
+test("the way in routes to every stage and every genre", () => {
+  // The entry page is where somebody who has named no genre and no stage
+  // arrives. A stage or a genre missing from it is reachable only by a
+  // customer who already knows it exists, which is nobody being helped — and
+  // that is the whole job this page was added to do.
+  const text = read(`skills/${ENTRY}/SKILL.md`);
+  for (const skill of [...STAGES, ...GENRES]) {
+    assert.ok(text.includes(skill), `the way in never mentions ${skill}`);
+  }
+  // It states which step takes the money, so it has to name the gate on it.
+  assert.ok(text.includes("fuse_quote"), "the way in describes the spending step with no gate");
+});
+
+test("the command that opens a job sends the model to the way in", () => {
+  // Claude Code picks a skill by its description, which is a guess; a command
+  // is the customer typing the entry point. If the command does not name the
+  // page, it is a second, shorter copy of the playbook that nothing updates.
+  const text = read("commands/start.md");
+  assert.ok(text.includes(ENTRY), `commands/start.md never tells the model to read ${ENTRY}`);
+});
+
 test("the skills a customer installs are the skills the package publishes", () => {
   // `files` is what reaches npm. A skill outside it exists for whoever cloned
   // the repository and for nobody who ran `npx -y @fuseai/mcp`.
   const files = json("package.json").files as string[];
   assert.ok(files.includes("skills"), "the skills folder is not in the published files");
+  // The installer reads this one off disk at install time to write it into
+  // Codex. Left out of `files`, `npx -y @fuseai/mcp install` fails on a
+  // machine that has Codex and works on one that does not.
+  assert.ok(files.includes("codex"), "the page Codex reads is not in the published files");
+});
+
+test("the page Codex reads routes to every stage and every genre", () => {
+  // Codex gets no commands, so if a genre is not named here it is reachable
+  // only by a customer who already knows it exists.
+  const text = read(CODEX_PAGE);
+  for (const skill of SKILLS) {
+    assert.ok(text.includes(skill), `the Codex page never mentions ${skill}`);
+  }
+  // And the gates, which on Claude Code are repeated on every command.
+  for (const gate of ["fuse_quote", "fuse_manifest", "fuse_upload"]) {
+    assert.ok(text.includes(gate), `the Codex page drops the ${gate} gate`);
+  }
 });
 
 test("every tool a skill, a command or a README names is a tool we ship", () => {

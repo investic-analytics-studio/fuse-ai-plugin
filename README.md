@@ -8,16 +8,24 @@ and renders them on your own machine with [HyperFrames](https://www.npmjs.com/pa
 Generating spends Fuse tokens. Everything after that — composing, captioning, mixing, rendering —
 runs locally and costs nothing.
 
-It ships as both an MCP server (any client) and a Claude Code plugin — the server, the four-step
-playbook, and a command for each kind of job, with the genre skill that kind of job needs:
+It runs in any client that speaks MCP, and the playbook reaches two of them: **Claude Code** takes
+it as a plugin (four stage skills, the genre skills, and a `/fuse:*` command per kind of job), and
+for **Codex** the installer writes the same pages into `~/.codex/skills/fuse-video` (see
+[Codex](#codex-gets-the-playbook-too-and-can-draw-its-own-frames)). Any other client gets the bare
+server, which works — but nothing there tells it to price the job before it spends:
 
 | Job | Command | Genre skill |
 |---|---|---|
+| No idea where to start | `/fuse:start` | `00-start` |
 | Food, drink, a shop, a review of something edible | `/fuse:food` | `genre-food` |
 | A product whose pack and brand must match in every frame | `/fuse:product` | `genre-product` |
 | Something continuous: episodes, or a plot across scenes | `/fuse:series` | `genre-series` |
 | Cartoon, animation, explainer | `/fuse:vox` | `genre-vox` |
 | An ad with no kind named yet | `/fuse:make-ad` | routes to the four above |
+
+`/fuse:start` is the way in for somebody who has just installed: it says how many steps the whole
+job has, what each one needs before the next may begin, which one spends money, and which one you
+are on. It takes no argument — not knowing what you want yet is what it is for.
 
 The four steps — `01-analysis`, `02-planning`, `03-generation`, `04-editing` — run for every one of
 them. A genre skill is not a fifth step: it is what those four need to know extra, and only the
@@ -53,6 +61,34 @@ it safely. It reports a client it cannot find, and prints by-hand steps for a cl
 /plugin marketplace add investic-analytics-studio/fuse-ai-plugin
 /plugin install fuse@fuse-ai-plugin
 ```
+
+### Codex gets the playbook too, and can draw its own frames
+
+`npx -y @fuseai/mcp install` does not stop at the server for Codex: it also writes the whole
+playbook into `$CODEX_HOME/skills/fuse-video` (`~/.codex` when `CODEX_HOME` is unset). It goes in as
+one skill named `fuse-video`, with the four stages and the four genres as reference pages inside it,
+because Codex shares one skill namespace with every other vendor on the machine — a bare folder
+called `01-analysis` in there is a collision waiting for whoever installs second.
+**Codex reads skills at startup, so they arrive in its next session, not the one running now.**
+
+On a machine with no Codex the installer creates nothing and says it skipped it. Claude Code already
+gets the same pages from the plugin and does not need these.
+
+**Why bother with Codex:** a GPT model can generate images itself (the built-in `image_gen` tool,
+documented by Codex's own `imagegen` skill), so stage 2 can finish in one place instead of waiting
+for the customer to send photographs. The path from a generated image to a clip is four steps, and
+none of them is optional:
+
+| Step | What | Why |
+|---|---|---|
+| 1 | `image_gen` at the real delivery ratio | a 9:16 ad needs a 9:16 frame, not a crop of one |
+| 2 | move the file into `<project>/assets/refs/` | it is saved under `$CODEX_HOME/generated_images/` by default, and `imagegen`'s own rule forbids leaving a project-referenced asset there |
+| 3 | have the customer approve the image | the next step puts it on a public URL, which cannot be taken back |
+| 4 | `fuse_upload`, then pass the url as `imageUrls` | `fuse_scenes` fetches reference images over HTTP itself, so a file on disk cannot be sent to it. Costs no tokens |
+
+An approved image is the clip's anchor for identity. Do not quietly regenerate it to make it
+prettier: the face and the food change for the whole ad. To change it, edit it from that same file
+with `image_gen` and have it approved again.
 
 **One client at a time, by hand:**
 
