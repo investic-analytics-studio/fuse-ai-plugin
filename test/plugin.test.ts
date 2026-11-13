@@ -35,7 +35,14 @@ const GENRES = ["genre-food", "genre-product", "genre-series", "genre-vox"];
  * there to route anybody.
  */
 const ENTRY = "00-start";
-const SKILLS = [ENTRY, ...STAGES, ...GENRES];
+/**
+ * Neither a stage nor a genre: the page that says what a clip that passed
+ * looks like. Generation is told to check every scene and editing is told to
+ * take the version that passed — the same eight judgements, so they are
+ * written once here rather than drifting apart in two steps.
+ */
+const REFERENCE = "shot-checks";
+const SKILLS = [ENTRY, ...STAGES, REFERENCE, ...GENRES];
 /** `genre-food` is driven by `/fuse:food`, and so on. */
 const commandOf = (genre: string): string => `commands/${genre.replace("genre-", "")}.md`;
 const COMMANDS = readdirSync(root + "commands")
@@ -227,6 +234,18 @@ test("the command that opens a job sends the model to the way in", () => {
   // page, it is a second, shorter copy of the playbook that nothing updates.
   const text = read("commands/start.md");
   assert.ok(text.includes(ENTRY), `commands/start.md never tells the model to read ${ENTRY}`);
+});
+
+test("the two steps that judge a clip read the same page about what passing is", () => {
+  for (const stage of ["03-generation", "04-editing"]) {
+    const text = read(`skills/${stage}/SKILL.md`);
+    assert.ok(text.includes(REFERENCE), `${stage} never points at ${REFERENCE}`);
+  }
+  // A scene that fails ends in one of two places: a free fix on the
+  // customer's own machine, or another generation they pay for. A page that
+  // offers the second without naming the gate is a page that spends quietly.
+  const checks = read(`skills/${REFERENCE}/SKILL.md`);
+  assert.ok(checks.includes("fuse_quote"), "the checks offer another generation without naming the gate on it");
 });
 
 test("the skills a customer installs are the skills the package publishes", () => {

@@ -31,6 +31,11 @@ The four steps â€” `01-analysis`, `02-planning`, `03-generation`, `04-editing` â
 them. A genre skill is not a fifth step: it is what those four need to know extra, and only the
 generation step spends tokens.
 
+`shot-checks` is not a step either. It is what *this scene passed* means: eight things to look
+at, what each one looks like when it fails, and which repairs are free and which are another
+generation you pay for. Generation reads it to judge a scene; editing reads it to pick the
+version that passed.
+
 ## Requirements
 
 - **Node 22.18.0 or newer.** `node --version` to check. The published package runs compiled
