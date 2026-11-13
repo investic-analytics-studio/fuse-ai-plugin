@@ -36,6 +36,10 @@ at, what each one looks like when it fails, and which repairs are free and which
 generation you pay for. Generation reads it to judge a scene; editing reads it to pick the
 version that passed.
 
+`channel-kit` is the same idea one level up: the host, the looks, the set and the voice that have
+to stay the same from one clip to the next, kept in a `channel.md` beside your clip folders. The
+package ships the blank form; the answers stay on your machine and go nowhere else.
+
 ## Requirements
 
 - **Node 22.18.0 or newer.** `node --version` to check. The published package runs compiled
