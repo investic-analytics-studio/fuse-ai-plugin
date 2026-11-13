@@ -16,11 +16,16 @@ server, which works — but nothing there tells it to price the job before it sp
 
 | Job | Command | Genre skill |
 |---|---|---|
+| No idea where to start | `/fuse:start` | `00-start` |
 | Food, drink, a shop, a review of something edible | `/fuse:food` | `genre-food` |
 | A product whose pack and brand must match in every frame | `/fuse:product` | `genre-product` |
 | Something continuous: episodes, or a plot across scenes | `/fuse:series` | `genre-series` |
 | Cartoon, animation, explainer | `/fuse:vox` | `genre-vox` |
 | An ad with no kind named yet | `/fuse:make-ad` | routes to the four above |
+
+`/fuse:start` is the way in for somebody who has just installed: it says how many steps the whole
+job has, what each one needs before the next may begin, which one spends money, and which one you
+are on. It takes no argument — not knowing what you want yet is what it is for.
 
 The four steps — `01-analysis`, `02-planning`, `03-generation`, `04-editing` — run for every one of
 them. A genre skill is not a fifth step: it is what those four need to know extra, and only the
