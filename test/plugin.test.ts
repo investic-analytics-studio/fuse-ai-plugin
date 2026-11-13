@@ -27,7 +27,15 @@ const STAGES = ["01-analysis", "02-planning", "03-generation", "04-editing"];
  * the two have to stay in step with each other.
  */
 const GENRES = ["genre-food", "genre-product", "genre-series", "genre-vox"];
-const SKILLS = [...STAGES, ...GENRES];
+/**
+ * The way in. Not a stage: it produces nothing and spends nothing. It is the
+ * page that answers "where am I and what does the next step need first", for a
+ * customer who has just installed and is looking at eight tools and nine
+ * skills. On Codex it carries more weight still, since there are no commands
+ * there to route anybody.
+ */
+const ENTRY = "00-start";
+const SKILLS = [ENTRY, ...STAGES, ...GENRES];
 /** `genre-food` is driven by `/fuse:food`, and so on. */
 const commandOf = (genre: string): string => `commands/${genre.replace("genre-", "")}.md`;
 const COMMANDS = readdirSync(root + "commands")
@@ -180,7 +188,11 @@ test("a genre is reachable: one command per genre skill, and it sends the model 
       assert.ok(text.includes(stage), `${command} skips ${stage}; every genre walks all four`);
     }
   }
-  const owned = new Set(["commands/make-ad.md", ...GENRES.map(commandOf)]);
+  const owned = new Set([
+    "commands/start.md",
+    "commands/make-ad.md",
+    ...GENRES.map(commandOf),
+  ]);
   for (const command of COMMANDS) {
     assert.ok(owned.has(command), `${command} belongs to no genre: add one, or add it to GENRES`);
   }
@@ -194,6 +206,27 @@ test("the command that names no genre routes to all of them", () => {
   for (const genre of GENRES) {
     assert.ok(text.includes(genre), `make-ad does not mention ${genre}`);
   }
+});
+
+test("the way in routes to every stage and every genre", () => {
+  // The entry page is where somebody who has named no genre and no stage
+  // arrives. A stage or a genre missing from it is reachable only by a
+  // customer who already knows it exists, which is nobody being helped — and
+  // that is the whole job this page was added to do.
+  const text = read(`skills/${ENTRY}/SKILL.md`);
+  for (const skill of [...STAGES, ...GENRES]) {
+    assert.ok(text.includes(skill), `the way in never mentions ${skill}`);
+  }
+  // It states which step takes the money, so it has to name the gate on it.
+  assert.ok(text.includes("fuse_quote"), "the way in describes the spending step with no gate");
+});
+
+test("the command that opens a job sends the model to the way in", () => {
+  // Claude Code picks a skill by its description, which is a guess; a command
+  // is the customer typing the entry point. If the command does not name the
+  // page, it is a second, shorter copy of the playbook that nothing updates.
+  const text = read("commands/start.md");
+  assert.ok(text.includes(ENTRY), `commands/start.md never tells the model to read ${ENTRY}`);
 });
 
 test("the skills a customer installs are the skills the package publishes", () => {
