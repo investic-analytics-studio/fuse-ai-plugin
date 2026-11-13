@@ -42,7 +42,14 @@ const ENTRY = "00-start";
  * written once here rather than drifting apart in two steps.
  */
 const REFERENCE = "shot-checks";
-const SKILLS = [ENTRY, ...STAGES, REFERENCE, ...GENRES];
+/**
+ * The customer's own channel: the host, the looks, the set and the voice
+ * that have to be the same in next month's clip as in this one. The package
+ * ships the blank form and holds none of the answers, which stay in a file
+ * on the customer's machine.
+ */
+const KIT = "channel-kit";
+const SKILLS = [ENTRY, ...STAGES, REFERENCE, KIT, ...GENRES];
 /** `genre-food` is driven by `/fuse:food`, and so on. */
 const commandOf = (genre: string): string => `commands/${genre.replace("genre-", "")}.md`;
 const COMMANDS = readdirSync(root + "commands")
@@ -246,6 +253,19 @@ test("the two steps that judge a clip read the same page about what passing is",
   // offers the second without naming the gate is a page that spends quietly.
   const checks = read(`skills/${REFERENCE}/SKILL.md`);
   assert.ok(checks.includes("fuse_quote"), "the checks offer another generation without naming the gate on it");
+});
+
+test("the channel kit is a blank form, and the way in says it is there", () => {
+  // Somebody coming back for their second clip arrives at the entry page, not
+  // at this skill. A kit the entry page never names is one only its author
+  // knows about, and the second clip starts from nothing all over again.
+  assert.ok(read(`skills/${ENTRY}/SKILL.md`).includes(KIT), `the way in never mentions ${KIT}`);
+  const kit = read(`skills/${KIT}/SKILL.md`);
+  // Two things keep the form from going stale: a reference image is uploaded
+  // once and reused by URL, and a tier is never carried between clips, since
+  // the catalogue is read live and a tier written down is last month's price.
+  assert.ok(kit.includes("fuse_upload"), "the kit never says how a reference image becomes a URL");
+  assert.ok(kit.includes("fuse_tiers"), "the kit lets a written-down tier stand in for the catalogue");
 });
 
 test("the skills a customer installs are the skills the package publishes", () => {
