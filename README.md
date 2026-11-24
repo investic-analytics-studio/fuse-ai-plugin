@@ -60,6 +60,13 @@ It does not edit anyone's config file. It runs each client's own CLI — `claude
 `codex mcp add` — because those own that file, know where it lives on each platform, and merge into
 it safely. It reports a client it cannot find, and prints by-hand steps for a client that has no CLI.
 
+**The ChatGPT desktop app on Windows needs no separate Codex CLI.** The app's Codex side carries its
+own `codex.exe` but does not put it on the PATH, so when `codex` is not found the installer asks
+Windows where the app is (`Get-AppxPackage OpenAI.Codex`) and registers through that binary instead.
+It writes the same `~/.codex/config.toml`, so the app sees the server from its next session. Only
+the Codex side can run it: the app's ordinary chat runs on OpenAI's servers and cannot start a
+program on your machine. (macOS: not handled yet — install the Codex CLI there.)
+
 **Claude Code, as a plugin** (adds the skills and `/fuse:make-ad` as well as the server):
 
 ```
