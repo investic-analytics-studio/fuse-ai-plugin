@@ -9,13 +9,18 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
+  CODEX_SKILL,
   SERVER_NAME,
+  codexSkillFiles,
   format,
   install,
   launchCommand,
   selfPackage,
   type InstallReport,
+  type SkillSink,
 } from "../src/install.ts";
 import type { CommandResult, Runner, ScaffoldDeps } from "../src/project/scaffold.ts";
 
@@ -53,6 +58,8 @@ function recorder(options: {
   addFails?: readonly string[];
   missingThrows?: boolean;
   scope?: string;
+  /** Install locations Windows reports for the ChatGPT app, one per package. */
+  app?: readonly string[];
 } = {}): Recorder {
   const present = options.present ?? ["claude", "codex", "npx"];
   const calls: Array<{ command: string; args: readonly string[] }> = [];
@@ -60,6 +67,10 @@ function recorder(options: {
   const held = new Set(options.configured ?? []);
   const run: Runner = async (command, args): Promise<CommandResult> => {
     calls.push({ command, args });
+    if (command === "powershell.exe" && options.app) {
+      // What `(Get-AppxPackage ...).InstallLocation` prints: a line per package.
+      return { code: 0, stdout: options.app.join("\r\n") + "\r\n", stderr: "" };
+    }
     if (!present.includes(command)) {
       // Windows runs these through a shell, which exits non-zero; elsewhere the
       // spawn itself throws. Both have to read as "this client is not here".
@@ -370,7 +381,83 @@ test("a machine with no client CLI at all is told what to install", async () => 
     report.clients.map((result) => result.state),
     ["absent", "absent"],
   );
-  assert.match(report.notes.join("\n"), /No supported client CLI was found/);
+  assert.match(report.notes.join("\n"), /No supported client was found/);
+  assert.match(report.notes.join("\n"), /ChatGPT desktop app/);
+});
+
+/* ------------------------------------------- Codex inside the ChatGPT app */
+
+/** Where Windows says the app is, with the version in the folder name, as it really is. */
+const APP = String.raw`C:\Program Files\WindowsApps\OpenAI.Codex_26.1117.4957.0_x64__2p2nqsd0c76g0`;
+const APP_CODEX = String.raw`${APP}\app\resources\codex.exe`;
+
+test("a Windows machine with only the ChatGPT app is registered through the app's own codex", async () => {
+  // The common case for the app: no `codex` on the PATH, because the app puts
+  // only chatgpt-desktop.exe there. Before this, the installer said "no
+  // supported client" on exactly the machines the Codex side runs on.
+  const bench = recorder({ present: ["npx", APP_CODEX], app: [APP] });
+  const report = await install({ deps: bench.deps, apiKey: KEY, platform: "win32" });
+
+  assert.equal(state(report, "Codex (ChatGPT desktop app)"), "installed");
+  assert.deepEqual(argsFor(bench, APP_CODEX), [
+    "mcp",
+    "add",
+    "fuse",
+    "--env",
+    `FUSE_API_KEY=${KEY}`,
+    "--",
+    "npx",
+    "-y",
+    "@fuseai/mcp",
+  ]);
+  // What gets registered is npx, never the app's binary: its folder carries
+  // the app's version and moves on every update.
+  assert.ok(!argsFor(bench, APP_CODEX).some((arg) => arg.includes("WindowsApps")));
+  const shownCommand = report.clients.find((r) => r.client.startsWith("Codex"))?.command ?? "";
+  assert.ok(shownCommand.startsWith(`"${APP_CODEX}" mcp add`), "a path with spaces is shown quoted");
+  assert.doesNotMatch(format(report), new RegExp(KEY));
+});
+
+test("the folder is asked of Windows, never listed", async () => {
+  // C:\Program Files\WindowsApps answers EPERM to an ordinary user, so the
+  // only way in is the package manager's own answer.
+  const bench = recorder({ present: ["npx", APP_CODEX], app: [APP] });
+  await install({ deps: bench.deps, platform: "win32", dryRun: true });
+  const asked = bench.calls.find((call) => call.command === "powershell.exe");
+  assert.ok(asked, "Windows was never asked where the app is");
+  assert.match(asked.args.join(" "), /Get-AppxPackage -Name OpenAI\.Codex/);
+});
+
+test("a codex on the PATH is used as it is, and Windows is not asked", async () => {
+  const bench = recorder({ present: ["codex", "npx", APP_CODEX], app: [APP] });
+  const report = await install({ deps: bench.deps, apiKey: KEY, platform: "win32" });
+  assert.equal(state(report, "Codex CLI"), "installed");
+  assert.ok(!bench.calls.some((call) => call.command === "powershell.exe"));
+  assert.ok(!bench.calls.some((call) => call.command === APP_CODEX));
+});
+
+test("off Windows there is no app package to look for", async () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const bench = recorder({ present: ["npx", APP_CODEX], app: [APP] });
+    const report = await install({ deps: bench.deps, platform });
+    assert.equal(state(report, "Codex CLI"), "absent");
+    assert.ok(!bench.calls.some((call) => call.command === "powershell.exe"));
+  }
+});
+
+test("an app whose codex does not answer is not registered with", async () => {
+  // Two packages at once is real mid-update; the first one here has no
+  // working binary, so only the second may be used — and with neither, none.
+  const OLD = String.raw`C:\Program Files\WindowsApps\OpenAI.Codex_26.1103.7773.0_x64__2p2nqsd0c76g0`;
+  const both = recorder({ present: ["npx", APP_CODEX], app: [OLD, APP] });
+  const report = await install({ deps: both.deps, apiKey: KEY, platform: "win32" });
+  assert.equal(state(report, "Codex (ChatGPT desktop app)"), "installed");
+  assert.ok(!both.calls.some((call) => call.command.startsWith(OLD) && call.args[1] === "add"));
+
+  const broken = recorder({ present: ["npx"], app: [OLD] });
+  const none = await install({ deps: broken.deps, apiKey: KEY, platform: "win32" });
+  assert.equal(state(none, "Codex CLI"), "absent");
+  assert.ok(!broken.calls.some((call) => call.args[1] === "add" && call.command !== "claude"));
 });
 
 /* -------------------------------------------------------------- the package */
@@ -382,4 +469,155 @@ test("the package names itself from package.json, in one place", () => {
   assert.deepEqual(launchCommand(), ["npx", "-y", "@fuseai/mcp"]);
   // The version to launch is a parameter, because pinning it is still open.
   assert.deepEqual(launchCommand("@fuseai/mcp@1.2.3"), ["npx", "-y", "@fuseai/mcp@1.2.3"]);
+});
+
+/* --------------------------------------------------- the playbook for Codex */
+
+/**
+ * Claude Code gets the four stages and the four genres from the plugin. Codex
+ * has no plugin to get them from, so without these pages it holds eight tools
+ * and nothing that tells it to quote before it spends. The tools are the part
+ * that costs money; the pages are the part that stops it.
+ */
+
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const skillsOnDisk = (): readonly string[] => readdirSync(repoRoot + "skills").sort();
+
+/** Records what would be written, instead of writing it. */
+function sink(
+  dir: string | undefined,
+  options: { throws?: boolean } = {},
+): { sink: SkillSink; written: Array<{ path: string; text: string }> } {
+  const written: Array<{ path: string; text: string }> = [];
+  return {
+    written,
+    sink: {
+      dir,
+      write: async (path, text) => {
+        if (options.throws) throw new Error("EACCES: permission denied");
+        written.push({ path, text });
+      },
+    },
+  };
+}
+
+test("the pages Codex gets are the skills the plugin has, not a second copy", () => {
+  const files = codexSkillFiles();
+  const skills = skillsOnDisk();
+  assert.equal(files.length, skills.length + 1, "one SKILL.md plus one page per skill");
+  const [entry, ...references] = files;
+  assert.ok(entry);
+  assert.equal(entry.to, "SKILL.md");
+  assert.match(entry.text, new RegExp(`^name: ${CODEX_SKILL}$`, "m"), "the skill names itself");
+  assert.deepEqual(
+    references.map((file) => file.to),
+    skills.map((skill) => `references/${skill}.md`),
+  );
+  // Byte for byte. The moment these become edited copies, the two clients are
+  // being told different things and only one of them gets fixed next time.
+  for (const [index, skill] of skills.entries()) {
+    const page = references[index];
+    assert.ok(page);
+    assert.equal(page.text, readFileSync(`${repoRoot}skills/${skill}/SKILL.md`, "utf8"));
+  }
+});
+
+test("everything lands under one name, inside a namespace that is not ours", async () => {
+  const bench = recorder();
+  const codex = sink("/home/x/.codex/skills");
+  const report = await install({ deps: bench.deps, skills: codex.sink });
+  assert.equal(report.skills.state, "installed");
+  assert.equal(report.skills.dir, `/home/x/.codex/skills/${CODEX_SKILL}`);
+  assert.equal(report.skills.files, codex.written.length);
+  for (const file of codex.written) {
+    assert.ok(
+      file.path.startsWith(`/home/x/.codex/skills/${CODEX_SKILL}/`),
+      `${file.path} is outside the one folder this package owns`,
+    );
+  }
+  // A folder called `01-analysis` in a skills directory shared with every
+  // other vendor is a collision waiting for whoever installs second.
+  for (const skill of skillsOnDisk()) {
+    assert.ok(
+      !codex.written.some((file) => file.path === `/home/x/.codex/skills/${skill}/SKILL.md`),
+      `${skill} was written as a top-level skill of its own`,
+    );
+  }
+});
+
+test("a machine with no Codex has nothing left in its home directory", async () => {
+  const bench = recorder();
+  const codex = sink(undefined);
+  const report = await install({ deps: bench.deps, skills: codex.sink });
+  assert.equal(report.skills.state, "absent");
+  assert.deepEqual(codex.written, []);
+  assert.equal(report.skills.dir, undefined);
+  // An installer handed no sink at all behaves the same, rather than reaching
+  // for a home directory of its own choosing.
+  const quiet = await install({ deps: recorder().deps });
+  assert.equal(quiet.skills.state, "absent");
+});
+
+test("a dry run says where the pages would go and writes none of them", async () => {
+  const bench = recorder();
+  const codex = sink("/home/x/.codex/skills");
+  const report = await install({ deps: bench.deps, skills: codex.sink, dryRun: true });
+  assert.equal(report.skills.state, "would-install");
+  assert.equal(report.skills.files, codexSkillFiles().length);
+  assert.deepEqual(codex.written, []);
+  const printed = format(report);
+  assert.match(printed, /Codex playbook: would install/);
+  assert.match(printed, new RegExp(`pages into /home/x/\.codex/skills/${CODEX_SKILL}`));
+});
+
+test("a Windows path stays a Windows path all the way through", async () => {
+  // A report reading `C:\\Users\\x\\.codex\\skills/fuse-video` opens fine and reads
+  // like a bug to the person it is printed for. The separator is built here
+  // rather than written as an escape, so what this asserts stays readable.
+  const BACKSLASH = String.fromCharCode(92);
+  const home = ["C:", "Users", "x", ".codex", "skills"].join(BACKSLASH);
+  const bench = recorder();
+  const codex = sink(home);
+  const report = await install({ deps: bench.deps, skills: codex.sink });
+  assert.equal(report.skills.dir, `${home}${BACKSLASH}${CODEX_SKILL}`);
+  for (const file of codex.written) {
+    assert.ok(!file.path.includes("/"), `${file.path} mixes separators`);
+  }
+});
+
+test("pages that cannot be written say what that leaves Codex holding", async () => {
+  const bench = recorder();
+  const codex = sink("/home/x/.codex/skills", { throws: true });
+  const report = await install({ deps: bench.deps, skills: codex.sink, apiKey: KEY });
+  assert.equal(report.skills.state, "failed");
+  assert.match(report.skills.detail ?? "", /EACCES/);
+  const notes = report.notes.join("\n");
+  assert.match(notes, /tools and no instructions/);
+  assert.match(notes, /fuse_scenes/, "the note has to name what gets called without a quote");
+  // And still never the key, not even on the failure path.
+  assert.ok(!format(report).includes(KEY));
+});
+
+test("the Codex page carries the image handoff, which is the reason it exists", () => {
+  // Codex can make the reference frames itself and Claude Code cannot. That is
+  // the whole advantage, and it is only an advantage if the order is kept:
+  // generate, move it into the project, get it approved, then upload it.
+  const [entry] = codexSkillFiles();
+  assert.ok(entry);
+  for (const needed of [
+    "image_gen",
+    "generated_images",
+    "fuse_upload",
+    "imageUrls",
+    "fuse_quote",
+    "fuse_manifest",
+  ]) {
+    assert.ok(entry.text.includes(needed), `the Codex page never mentions ${needed}`);
+  }
+  for (const skill of skillsOnDisk()) {
+    assert.ok(
+      entry.text.includes(`references/${skill}.md`),
+      `the Codex page never sends the model to ${skill}`,
+    );
+  }
 });

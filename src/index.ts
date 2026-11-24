@@ -12,7 +12,10 @@
  * protocol, so anything this file has to say goes to stderr.
  */
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -28,7 +31,7 @@ import {
 } from "./project/scaffold.ts";
 import { createTools, type ToolDefinition } from "./tools.ts";
 import { ElevenLabs, VoiceError, type VoicePort } from "./voice/elevenlabs.ts";
-import { format, install, selfPackage } from "./install.ts";
+import { format, install, selfPackage, type SkillSink } from "./install.ts";
 
 const DEFAULT_BASE_URL = "https://api.fuseai.art";
 
@@ -160,9 +163,30 @@ export function packageSpec(args: readonly string[]): string | undefined {
   return spec;
 }
 
+/**
+ * Where Codex looks for skills on this machine.
+ *
+ * `CODEX_HOME` first because Codex sets it itself and a customer may well have
+ * moved it; `~/.codex` otherwise. The directory has to be there already: its
+ * existence is the only evidence this machine has Codex at all, and creating
+ * it would mean leaving a tree of instructions in the home directory of
+ * somebody who never installed the thing they are for.
+ */
+function codexSkills(): SkillSink {
+  const home = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  return {
+    dir: existsSync(home) ? join(home, "skills") : undefined,
+    write: async (path, text) => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, text, "utf8");
+    },
+  };
+}
+
 export async function runInstaller(args: readonly string[]): Promise<void> {
   const report = await install({
     deps: scaffoldDeps(),
+    skills: codexSkills(),
     apiKey: process.env.FUSE_API_KEY,
     voiceKey: process.env.ELEVENLABS_API_KEY,
     dryRun: args.includes("--dry-run"),

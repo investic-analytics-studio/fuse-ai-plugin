@@ -18,7 +18,8 @@
  * There are two because they are two accounts — Fuse bills the clips, and the
  * customer's own ElevenLabs account bills the voiceover.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ensureDeps, type DepReport, type Runner, type ScaffoldDeps } from "./project/scaffold.ts";
 
 /** The name the server is registered under, in every client. */
@@ -77,6 +78,72 @@ interface ClientSpec {
   scopeOf?(output: string): string | undefined;
   /** The scope `add` writes to, when the client has more than one. */
   readonly writesTo?: string;
+  /**
+   * Where else this client's CLI can be, when `cli` is not on the PATH. Gives
+   * back a command that answers `--version`, or undefined.
+   */
+  locate?(run: Runner, cwd: string, platform: NodeJS.Platform): Promise<string | undefined>;
+  /** The name to report when the CLI was found by `locate` rather than on the PATH. */
+  readonly locatedName?: string;
+}
+
+/**
+ * The Windows package the ChatGPT desktop app ships in. Its Codex side runs a
+ * real `codex.exe` from inside it, and that binary reads and writes the same
+ * `~/.codex/config.toml` the standalone CLI does — so registering through it
+ * is registering with the app. Measured on 26.1117 (codex-cli 0.171.0-alpha).
+ */
+export const CODEX_APP_PACKAGE = "OpenAI.Codex";
+
+/**
+ * The `codex.exe` inside the ChatGPT desktop app, for a machine that has the
+ * app and never installed the CLI — which is most machines that have the app.
+ *
+ * The app does not put `codex` on the PATH (its only execution alias is
+ * `chatgpt-desktop.exe`), and the folder it lives in cannot be listed:
+ * `C:\Program Files\WindowsApps` answers EPERM to an ordinary user, and the
+ * package folder's name carries the app's version, so it moves on every
+ * update. Windows itself is asked where the package is instead. That path is
+ * only used while installing: what gets registered is `npx -y @fuseai/mcp`,
+ * not this binary, so an app update moving the folder breaks nothing.
+ */
+export async function codexInChatGptApp(
+  run: Runner,
+  cwd: string,
+  platform: NodeJS.Platform,
+): Promise<string | undefined> {
+  if (platform !== "win32") return undefined;
+  let found;
+  try {
+    found = await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-AppxPackage -Name ${CODEX_APP_PACKAGE}).InstallLocation`,
+      ],
+      cwd,
+    );
+  } catch {
+    return undefined;
+  }
+  if (found.code !== 0) return undefined;
+  // One line per installed package; more than one is possible mid-update.
+  const roots = found.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/[\\/]+$/, ""))
+    .filter(Boolean);
+  for (const root of roots) {
+    const exe = `${root}\\app\\resources\\codex.exe`;
+    if (await hasCli(run, exe, cwd)) return exe;
+  }
+  return undefined;
+}
+
+/** A command as someone would type it: quoted when the path has a space. */
+function shown(cli: string): string {
+  return /\s/.test(cli) ? `"${cli}"` : cli;
 }
 
 const CLIENTS: readonly ClientSpec[] = [
@@ -115,8 +182,108 @@ const CLIENTS: readonly ClientSpec[] = [
       ...launch,
     ],
     inspect: ["mcp", "get", SERVER_NAME],
+    locate: codexInChatGptApp,
+    locatedName: "Codex (ChatGPT desktop app)",
   },
 ];
+
+/* ------------------------------------------------------------ Codex skills */
+
+/**
+ * The name the whole playbook goes in under on Codex.
+ *
+ * Claude Code reads a plugin folder, so there the four stages and the four
+ * genres are eight skills and the plugin keeps them apart. Codex has no such
+ * folder: it reads `$CODEX_HOME/skills/<name>/SKILL.md`, one flat namespace
+ * shared with every other vendor on the machine and with its own system
+ * skills. Putting eight directories called things like `01-analysis` into
+ * somebody else`s namespace is how two products quietly shadow each other, so
+ * all of it goes in under one name that says whose it is, with the eight as
+ * reference pages — the shape Codex uses itself, where `imagegen` is a
+ * SKILL.md plus a references folder.
+ */
+export const CODEX_SKILL = "fuse-video";
+
+/** Where the package root is, from wherever this file was built to. */
+function packageRoot(): string {
+  return fileURLToPath(new URL("..", import.meta.url));
+}
+
+export interface SkillFile {
+  /** Path inside the installed skill folder. */
+  readonly to: string;
+  /** What it says. Read from this package, never retyped. */
+  readonly text: string;
+}
+
+/**
+ * Every file the Codex skill is made of.
+ *
+ * The reference list is read off the `skills/` directory rather than written
+ * out here, so a skill added for Claude Code reaches Codex too without
+ * anybody remembering to edit this file.
+ */
+export function codexSkillFiles(): readonly SkillFile[] {
+  const root = packageRoot();
+  const files: SkillFile[] = [
+    { to: "SKILL.md", text: readFileSync(root + "codex/SKILL.md", "utf8") },
+  ];
+  for (const skill of readdirSync(root + "skills").sort()) {
+    files.push({
+      to: `references/${skill}.md`,
+      text: readFileSync(`${root}skills/${skill}/SKILL.md`, "utf8"),
+    });
+  }
+  return files;
+}
+
+/**
+ * Where Codex keeps its skills, and how to write one. Injected so a test can
+ * watch what would be written without touching the machine running it.
+ */
+export interface SkillSink {
+  /** The skills directory, or undefined when Codex has never run here. */
+  readonly dir?: string;
+  readonly write: (path: string, text: string) => Promise<void>;
+}
+
+export interface SkillResult {
+  readonly state: InstallState;
+  /** The folder the pages went into. */
+  readonly dir?: string;
+  readonly files?: number;
+  readonly detail?: string;
+}
+
+async function writeCodexSkill(
+  sink: SkillSink | undefined,
+  dryRun: boolean,
+): Promise<SkillResult> {
+  if (!sink?.dir) return { state: "absent" };
+  // The sink gives a path in the host platform’s own spelling, and a report
+  // that reads `C:\Users\...\skills/fuse-video` looks like a bug to the person
+  // reading it even though it opens fine. So the separator is taken from the
+  // directory rather than assumed.
+  const root = sink.dir.replace(/[\/]+$/, "");
+  const sep = root.includes("\\") ? "\\" : "/";
+  const dir = `${root}${sep}${CODEX_SKILL}`;
+  const at = (to: string): string => `${dir}${sep}${to.split("/").join(sep)}`;
+  let files: readonly SkillFile[];
+  try {
+    files = codexSkillFiles();
+  } catch (error) {
+    // The package is on disk, so this is a packaging mistake rather than a
+    // machine problem: say so instead of reporting Codex as not installed.
+    return { state: "failed", dir, detail: `this package is missing its own pages: ${error}` };
+  }
+  if (dryRun) return { state: "would-install", dir, files: files.length };
+  try {
+    for (const file of files) await sink.write(at(file.to), file.text);
+  } catch (error) {
+    return { state: "failed", dir, files: files.length, detail: String(error) };
+  }
+  return { state: "installed", dir, files: files.length };
+}
 
 /** A client that has no CLI to ask, so the steps are printed instead. */
 const BY_HAND: readonly { readonly name: string; readonly steps: readonly string[] }[] = [
@@ -155,6 +322,8 @@ export interface InstallReport {
   readonly clients: readonly ClientResult[];
   readonly byHand: readonly { readonly name: string; readonly steps: readonly string[] }[];
   readonly machine: DepReport;
+  /** What happened to the playbook pages Codex reads. */
+  readonly skills: SkillResult;
   readonly keyFound: boolean;
   /** Whether a key for the customer's own ElevenLabs account was in the environment. */
   readonly voiceKeyFound: boolean;
@@ -170,6 +339,14 @@ export interface InstallOptions {
   readonly dryRun?: boolean;
   readonly cwd?: string;
   readonly packageSpec?: string;
+  /** Which platform to look for clients on. Defaults to this one; a test names it. */
+  readonly platform?: NodeJS.Platform;
+  /**
+   * Where to put the playbook for Codex. Left out, nothing is written and the
+   * report says so — an installer that silently writes into a home directory
+   * nobody asked about is worse than one that says it skipped it.
+   */
+  readonly skills?: SkillSink;
 }
 
 /**
@@ -227,43 +404,49 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
   const results: ClientResult[] = [];
   const shadowed: string[] = [];
 
+  const platform = options.platform ?? process.platform;
+
   for (const client of CLIENTS) {
-    if (!(await hasCli(deps.run, client.cli, cwd))) {
+    const cli = (await hasCli(deps.run, client.cli, cwd))
+      ? client.cli
+      : await client.locate?.(deps.run, cwd, platform);
+    if (!cli) {
       results.push({ client: client.name, state: "absent" });
       continue;
     }
+    const name = cli === client.cli ? client.name : (client.locatedName ?? client.name);
     const args = client.add(launch, env);
-    const command = `${client.cli} ${redact(args, secrets)}`;
+    const command = `${shown(cli)} ${redact(args, secrets)}`;
     if (dryRun) {
-      results.push({ client: client.name, state: "would-install", command });
+      results.push({ client: name, state: "would-install", command });
       continue;
     }
 
     // Written, not merely added: running this again is how a customer rotates
     // a key, and it has to end with the keys they just set rather than with
     // whatever was registered first.
-    if (client.clear) await deps.run(client.cli, client.clear(), cwd);
-    const added = await deps.run(client.cli, args, cwd);
-    const seen = await deps.run(client.cli, client.inspect, cwd);
+    if (client.clear) await deps.run(cli, client.clear(), cwd);
+    const added = await deps.run(cli, args, cwd);
+    const seen = await deps.run(cli, client.inspect, cwd);
     if (added.code !== 0 || seen.code !== 0) {
       // Two different failures, and saying which is which is the difference
       // between "that CLI refused, here is what it said" and "that CLI claimed
       // success and then had nothing to show for it".
       const why =
         added.code !== 0
-          ? added.stderr || added.stdout || `${client.cli} refused without saying why`
-          : `${client.cli} exited 0 but then reported nothing registered under ` +
+          ? added.stderr || added.stdout || `${name} refused without saying why`
+          : `${name} exited 0 but then reported nothing registered under ` +
             SERVER_NAME +
             (added.stdout.trim() ? `; it said: ${added.stdout.trim()}` : "");
       results.push({
-        client: client.name,
+        client: name,
         state: "failed",
         command,
         detail: redact([why], secrets),
       });
       continue;
     }
-    results.push({ client: client.name, state: "installed", command });
+    results.push({ client: name, state: "installed", command });
 
     // A registration in another scope wins over the one just written, and
     // starts the server with whatever the environment holds instead of the
@@ -272,7 +455,7 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     const scope = client.scopeOf?.(seen.stdout);
     if (scope && client.writesTo && !scope.includes(client.writesTo)) {
       shadowed.push(
-        `${client.name} reports ${SERVER_NAME} under "${scope}", not ${client.writesTo} config, ` +
+        `${name} reports ${SERVER_NAME} under "${scope}", not ${client.writesTo} config, ` +
           "so that is the registration it starts — and it reads the keys from the environment " +
           `it is launched from, not from the one just written. Either set FUSE_API_KEY (and ` +
           "ELEVENLABS_API_KEY) there, or drop that registration with " +
@@ -281,8 +464,24 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     }
   }
 
+  const skills = await writeCodexSkill(options.skills, dryRun);
   const machine = await ensureDeps(cwd, deps);
   const notes: string[] = [...shadowed];
+  if (skills.state === "installed" || skills.state === "would-install") {
+    notes.push(
+      `Codex reads its skills from disk at startup, so the playbook under ${skills.dir} ` +
+        "is there from its next session, not this one. Claude Code gets the same pages from " +
+        "the plugin instead, and does not need these.",
+    );
+  }
+  if (skills.state === "failed") {
+    notes.push(
+      `The server is registered, but the playbook pages could not be written to ${skills.dir}: ` +
+        (skills.detail ?? "no reason given") +
+        ". Codex will have the tools and no instructions for them, which is the expensive way " +
+        "round: it can call fuse_scenes without ever being told to quote first.",
+    );
+  }
   if (!apiKey) {
     notes.push(
       "No FUSE_API_KEY was set, so the server was registered without one. Listing tiers and " +
@@ -313,8 +512,9 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
   }
   if (results.every((result) => result.state === "absent")) {
     notes.push(
-      "No supported client CLI was found on this machine. Install Claude Code or the Codex CLI, " +
-        "or add the connector by hand with the steps above.",
+      "No supported client was found on this machine. Install Claude Code, the Codex CLI or the " +
+        "ChatGPT desktop app (its Codex side runs this server), or add the connector by hand " +
+        "with the steps above.",
     );
   }
 
@@ -323,6 +523,7 @@ export async function install(options: InstallOptions): Promise<InstallReport> {
     clients: results,
     byHand: BY_HAND,
     machine,
+    skills,
     keyFound: Boolean(apiKey),
     voiceKeyFound: Boolean(voiceKey),
     notes,
@@ -353,6 +554,12 @@ export function format(report: InstallReport): string {
       for (const step of client.steps) lines.push(`    ${step}`);
     }
   }
+  lines.push("", `  Codex playbook: ${LABEL[report.skills.state]}`);
+  if (report.skills.dir) {
+    const count = report.skills.files;
+    lines.push(`    ${count === undefined ? "" : `${count} pages into `}${report.skills.dir}`);
+  }
+  if (report.skills.detail) lines.push(`    ${report.skills.detail}`);
   lines.push("", `  rendering: ${report.machine.ok ? "ready" : "not ready"}`);
   // Doctor's full text only when it matters. It reports optional extras this
   // package never uses (transcription, local TTS, local music, Docker) and
