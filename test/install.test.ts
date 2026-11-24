@@ -58,6 +58,8 @@ function recorder(options: {
   addFails?: readonly string[];
   missingThrows?: boolean;
   scope?: string;
+  /** Install locations Windows reports for the ChatGPT app, one per package. */
+  app?: readonly string[];
 } = {}): Recorder {
   const present = options.present ?? ["claude", "codex", "npx"];
   const calls: Array<{ command: string; args: readonly string[] }> = [];
@@ -65,6 +67,10 @@ function recorder(options: {
   const held = new Set(options.configured ?? []);
   const run: Runner = async (command, args): Promise<CommandResult> => {
     calls.push({ command, args });
+    if (command === "powershell.exe" && options.app) {
+      // What `(Get-AppxPackage ...).InstallLocation` prints: a line per package.
+      return { code: 0, stdout: options.app.join("\r\n") + "\r\n", stderr: "" };
+    }
     if (!present.includes(command)) {
       // Windows runs these through a shell, which exits non-zero; elsewhere the
       // spawn itself throws. Both have to read as "this client is not here".
@@ -375,7 +381,83 @@ test("a machine with no client CLI at all is told what to install", async () => 
     report.clients.map((result) => result.state),
     ["absent", "absent"],
   );
-  assert.match(report.notes.join("\n"), /No supported client CLI was found/);
+  assert.match(report.notes.join("\n"), /No supported client was found/);
+  assert.match(report.notes.join("\n"), /ChatGPT desktop app/);
+});
+
+/* ------------------------------------------- Codex inside the ChatGPT app */
+
+/** Where Windows says the app is, with the version in the folder name, as it really is. */
+const APP = String.raw`C:\Program Files\WindowsApps\OpenAI.Codex_26.1117.4957.0_x64__2p2nqsd0c76g0`;
+const APP_CODEX = String.raw`${APP}\app\resources\codex.exe`;
+
+test("a Windows machine with only the ChatGPT app is registered through the app's own codex", async () => {
+  // The common case for the app: no `codex` on the PATH, because the app puts
+  // only chatgpt-desktop.exe there. Before this, the installer said "no
+  // supported client" on exactly the machines the Codex side runs on.
+  const bench = recorder({ present: ["npx", APP_CODEX], app: [APP] });
+  const report = await install({ deps: bench.deps, apiKey: KEY, platform: "win32" });
+
+  assert.equal(state(report, "Codex (ChatGPT desktop app)"), "installed");
+  assert.deepEqual(argsFor(bench, APP_CODEX), [
+    "mcp",
+    "add",
+    "fuse",
+    "--env",
+    `FUSE_API_KEY=${KEY}`,
+    "--",
+    "npx",
+    "-y",
+    "@fuseai/mcp",
+  ]);
+  // What gets registered is npx, never the app's binary: its folder carries
+  // the app's version and moves on every update.
+  assert.ok(!argsFor(bench, APP_CODEX).some((arg) => arg.includes("WindowsApps")));
+  const shownCommand = report.clients.find((r) => r.client.startsWith("Codex"))?.command ?? "";
+  assert.ok(shownCommand.startsWith(`"${APP_CODEX}" mcp add`), "a path with spaces is shown quoted");
+  assert.doesNotMatch(format(report), new RegExp(KEY));
+});
+
+test("the folder is asked of Windows, never listed", async () => {
+  // C:\Program Files\WindowsApps answers EPERM to an ordinary user, so the
+  // only way in is the package manager's own answer.
+  const bench = recorder({ present: ["npx", APP_CODEX], app: [APP] });
+  await install({ deps: bench.deps, platform: "win32", dryRun: true });
+  const asked = bench.calls.find((call) => call.command === "powershell.exe");
+  assert.ok(asked, "Windows was never asked where the app is");
+  assert.match(asked.args.join(" "), /Get-AppxPackage -Name OpenAI\.Codex/);
+});
+
+test("a codex on the PATH is used as it is, and Windows is not asked", async () => {
+  const bench = recorder({ present: ["codex", "npx", APP_CODEX], app: [APP] });
+  const report = await install({ deps: bench.deps, apiKey: KEY, platform: "win32" });
+  assert.equal(state(report, "Codex CLI"), "installed");
+  assert.ok(!bench.calls.some((call) => call.command === "powershell.exe"));
+  assert.ok(!bench.calls.some((call) => call.command === APP_CODEX));
+});
+
+test("off Windows there is no app package to look for", async () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const bench = recorder({ present: ["npx", APP_CODEX], app: [APP] });
+    const report = await install({ deps: bench.deps, platform });
+    assert.equal(state(report, "Codex CLI"), "absent");
+    assert.ok(!bench.calls.some((call) => call.command === "powershell.exe"));
+  }
+});
+
+test("an app whose codex does not answer is not registered with", async () => {
+  // Two packages at once is real mid-update; the first one here has no
+  // working binary, so only the second may be used — and with neither, none.
+  const OLD = String.raw`C:\Program Files\WindowsApps\OpenAI.Codex_26.1103.7773.0_x64__2p2nqsd0c76g0`;
+  const both = recorder({ present: ["npx", APP_CODEX], app: [OLD, APP] });
+  const report = await install({ deps: both.deps, apiKey: KEY, platform: "win32" });
+  assert.equal(state(report, "Codex (ChatGPT desktop app)"), "installed");
+  assert.ok(!both.calls.some((call) => call.command.startsWith(OLD) && call.args[1] === "add"));
+
+  const broken = recorder({ present: ["npx"], app: [OLD] });
+  const none = await install({ deps: broken.deps, apiKey: KEY, platform: "win32" });
+  assert.equal(state(none, "Codex CLI"), "absent");
+  assert.ok(!broken.calls.some((call) => call.args[1] === "add" && call.command !== "claude"));
 });
 
 /* -------------------------------------------------------------- the package */
